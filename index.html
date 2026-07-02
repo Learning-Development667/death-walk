@@ -120,10 +120,11 @@
     }
 
     .version {
-      position: absolute;
-      bottom: calc(14px + env(safe-area-inset-bottom));
-      left: 0;
-      right: 0;
+      position: fixed;
+      bottom: calc(10px + env(safe-area-inset-bottom));
+      right: calc(12px + env(safe-area-inset-right));
+      z-index: 20;
+      pointer-events: none;
       font-family: 'DM Mono', monospace;
       font-size: 11px;
       color: rgba(255, 255, 255, 0.35);
@@ -137,7 +138,6 @@
     <div class="title">DEATH WALK</div>
     <div class="subtitle">Tiki Beach to Daytona</div>
     <div class="prompt">TAP TO START</div>
-    <div class="version" id="version"></div>
   </div>
 
   <div id="end-screen" class="overlay hidden">
@@ -145,6 +145,8 @@
     <div class="end-time" id="end-time">0.0s</div>
     <button class="btn" id="walk-again">WALK AGAIN</button>
   </div>
+
+  <div class="version" id="version"></div>
 
   <script src="js/scripts.js"></script>
   <script>
