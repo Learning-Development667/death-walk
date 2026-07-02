@@ -1,13 +1,13 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.4.1';
+  var VERSION = '0.4.2';
 
   // ---------------------------------------------------------------------
   // Tuning
   // ---------------------------------------------------------------------
   var RUN_DISTANCE = 400;        // metres, Tiki Beach to Daytona
-  var WALK_SPEED = 10;           // metres per second
+  var WALK_SPEED = 5;            // metres per second (400m in ~80s)
   var TILE_METRES = 2.5;         // promenade tile size in metres
   var GRID_COLUMNS = 8;          // longitudinal tile grid lines (visual only)
   var BUILDING_METRES = 6;       // depth of one building block in metres
