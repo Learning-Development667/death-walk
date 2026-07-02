@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.2.0';
+  var VERSION = '0.2.1';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -12,9 +12,10 @@
   var LANE_SLIDE_MS = 180;       // duration of the lane change tween
   var TILE_METRES = 2.5;         // promenade tile size in metres
   var BUILDING_METRES = 6;       // depth of one building block in metres
-  var PERSPECTIVE = 6;           // metres ahead at which apparent size halves
-  var DRAW_DISTANCE = 90;        // metres of world drawn ahead of the player
-  var HORIZON_FRAC = 0.34;       // horizon line as a fraction of screen height
+  var PERSPECTIVE = 11;          // larger = gentler recede, more visible ahead
+  var DEPTH_CURVE = 1.55;        // >1 keeps mid-distance gradual, rushes at end
+  var DRAW_DISTANCE = 170;       // metres of world drawn ahead of the player
+  var HORIZON_FRAC = 0.47;       // horizon line as a fraction of screen height
 
   // ---------------------------------------------------------------------
   // Canvas
@@ -43,9 +44,9 @@
   // Beach strip on the left, buildings on the right, 4-lane promenade
   // in between, all converging on the vanishing point.
   // ---------------------------------------------------------------------
-  function beachWidth() { return W * 0.16; }
-  function buildingWidth() { return W * 0.16; }
-  function promenadeWidth() { return W * 0.52; }
+  function beachWidth() { return W * 0.18; }
+  function buildingWidth() { return W * 0.18; }
+  function promenadeWidth() { return W * 0.44; }
   function promenadeLeft() { return (W - promenadeWidth()) / 2; }
   function laneWidth() { return promenadeWidth() / LANES; }
 
@@ -75,7 +76,9 @@
   function vanishingX() { return W / 2; }
 
   function depthOf(metresAhead) {
-    return PERSPECTIVE / (PERSPECTIVE + metresAhead);
+    // Hyperbolic falloff, then a gentle exponent so distant things hold
+    // their apparent distance longer and only swell in the final metres.
+    return Math.pow(PERSPECTIVE / (PERSPECTIVE + metresAhead), DEPTH_CURVE);
   }
 
   function depthToY(d) {
@@ -93,9 +96,10 @@
   }
 
   // World metres ahead corresponding to the bottom edge (negative).
+  // Inverse of depthOf, including the DEPTH_CURVE exponent.
   function bottomMetres() {
     var d = bottomDepth();
-    return PERSPECTIVE * (1 - d) / d;
+    return PERSPECTIVE * (Math.pow(d, -1 / DEPTH_CURVE) - 1);
   }
 
   // ---------------------------------------------------------------------
