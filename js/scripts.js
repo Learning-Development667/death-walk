@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.2.3';
+  var VERSION = '0.2.4';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -123,6 +123,7 @@
   var endTimeEl = document.getElementById('end-time');
   var versionEl = document.getElementById('version');
   var walkAgainBtn = document.getElementById('walk-again');
+  var debugEl = document.getElementById('debug'); // TEMP swipe debug readout
 
   versionEl.textContent = 'v' + VERSION;
 
@@ -177,42 +178,49 @@
 
   // ---------------------------------------------------------------------
   // Input — genuine swipe detection anywhere on screen, arrow keys on
-  // desktop. A lane change fires only when a single finger travels far
-  // enough horizontally between touchstart and touchend; the direction
-  // comes purely from the sign of that horizontal delta, never from where
-  // on screen the touch began — so this is a swipe, not left/right zones.
+  // desktop. A lane change fires only when the finger travels far enough
+  // horizontally between touchstart and touchend; the direction comes
+  // purely from the sign of that horizontal delta, never from where on
+  // screen the touch began — so this is a swipe, not left/right zones.
+  //
+  // touchstart reads e.touches[0] (the active touch) and touchend reads
+  // e.changedTouches[0] (the touch that just lifted) — the correct pairing
+  // for mobile Safari and Chrome. startX is reset on every touchend so no
+  // stale start position can survive into a later gesture.
   // ---------------------------------------------------------------------
   var SWIPE_THRESHOLD = 45; // min horizontal travel in CSS px to count
-  var touch = null;         // tracked finger: { id, x, y } or null
-
-  function trackedTouch(list) {
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].identifier === touch.id) return list[i];
-    }
-    return null;
-  }
+  var startX = null;
+  var startY = null;
 
   document.addEventListener('touchstart', function (e) {
-    if (touch !== null) return; // already following a finger
-    var t = e.changedTouches[0];
-    touch = { id: t.identifier, x: t.clientX, y: t.clientY };
+    var t = e.touches[0];
+    if (!t) return;
+    startX = t.clientX;
+    startY = t.clientY;
   }, { passive: true });
 
   document.addEventListener('touchend', function (e) {
-    if (touch === null) return;
-    var t = trackedTouch(e.changedTouches);
-    if (t === null) return; // a different finger lifted
-    var dx = t.clientX - touch.x;
-    var dy = t.clientY - touch.y;
-    touch = null;
+    if (startX === null) return;
+    var t = e.changedTouches[0];
+    if (!t) { startX = startY = null; return; }
+    var dx = t.clientX - startX;
+    var dy = t.clientY - startY;
+    startX = startY = null; // reset every time — never strand a start point
+
+    if (debugEl) {
+      var fired = Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy);
+      debugEl.textContent =
+        'dx ' + Math.round(dx) + '  dy ' + Math.round(dy) + '  ' + (fired ? 'SWIPE' : 'tap');
+    }
+
     // Decisive, mostly-horizontal drag only — taps and vertical drags ignored.
     if (Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
       moveLane(dx > 0 ? 1 : -1);
     }
   }, { passive: true });
 
-  document.addEventListener('touchcancel', function (e) {
-    if (touch !== null && trackedTouch(e.changedTouches) !== null) touch = null;
+  document.addEventListener('touchcancel', function () {
+    startX = startY = null; // abandoned gesture — clear unconditionally
   }, { passive: true });
 
   document.addEventListener('keydown', function (e) {

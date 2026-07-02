@@ -129,6 +129,23 @@
       font-size: 11px;
       color: rgba(255, 255, 255, 0.35);
     }
+
+    /* TEMP: swipe-debug readout, removed once mobile touch is confirmed */
+    .debug {
+      position: fixed;
+      top: calc(12px + env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 30;
+      pointer-events: none;
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: #ffd166;
+      background: rgba(10, 22, 40, 0.85);
+      padding: 3px 8px;
+      border-radius: 5px;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -147,6 +164,7 @@
   </div>
 
   <div class="version" id="version"></div>
+  <div class="debug" id="debug">dx –  dy –</div>
 
   <script src="js/scripts.js"></script>
   <script>
