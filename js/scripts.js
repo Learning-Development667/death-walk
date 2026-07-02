@@ -1,21 +1,23 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.2.4';
+  var VERSION = '0.3.0';
 
   // ---------------------------------------------------------------------
   // Tuning
   // ---------------------------------------------------------------------
-  var LANES = 4;                 // lanes across the promenade
   var RUN_DISTANCE = 400;        // metres, Tiki Beach to Daytona
   var WALK_SPEED = 10;           // metres per second
-  var LANE_SLIDE_MS = 180;       // duration of the lane change tween
   var TILE_METRES = 2.5;         // promenade tile size in metres
+  var GRID_COLUMNS = 8;          // longitudinal tile grid lines (visual only)
   var BUILDING_METRES = 6;       // depth of one building block in metres
   var PERSPECTIVE = 11;          // larger = gentler recede, more visible ahead
   var DEPTH_CURVE = 1.55;        // >1 keeps mid-distance gradual, rushes at end
+  var MIN_SPREAD = 0.18;         // lateral width floor at the horizon
   var DRAW_DISTANCE = 170;       // metres of world drawn ahead of the player
   var HORIZON_FRAC = 0.47;       // horizon line as a fraction of screen height
+  var FOLLOW_RATE = 12;          // drag smoothing, higher = snappier follow
+  var KEY_SPEED = 1.2;           // held arrow key speed, promenade widths/sec
 
   // ---------------------------------------------------------------------
   // Canvas
@@ -41,18 +43,13 @@
 
   // ---------------------------------------------------------------------
   // Layout — widths are defined at the player's depth (d = 1).
-  // Beach strip on the left, buildings on the right, 4-lane promenade
-  // in between, all converging on the vanishing point.
+  // Beach strip on the left, buildings on the right, open promenade
+  // in between.
   // ---------------------------------------------------------------------
   function beachWidth() { return W * 0.18; }
   function buildingWidth() { return W * 0.18; }
   function promenadeWidth() { return W * 0.44; }
   function promenadeLeft() { return (W - promenadeWidth()) / 2; }
-  function laneWidth() { return promenadeWidth() / LANES; }
-
-  function laneCentreX(lane) {
-    return promenadeLeft() + laneWidth() * (lane - 0.5);
-  }
 
   function playerY() {
     return H * 0.78; // lower third of the screen
@@ -64,13 +61,17 @@
   // Depth d runs from 0 at the horizon to 1 level with the player (and
   // slightly beyond 1 for the strip between the player and the bottom
   // edge of the screen). Everything in the world derives its screen
-  // position and scale from d, so Phase 2 hazards and power-ups can use
-  // exactly the same projection:
+  // position and scale from d, so hazards and power-ups can use exactly
+  // the same projection:
   //
   //   var d = depthOf(metresAhead);        // world distance -> depth
   //   var y = depthToY(d);                 // depth -> screen y
   //   var x = depthToX(xAtPlayerDepth, d); // lane/offset x -> screen x
-  //   var s = d;                           // depth doubles as scale
+  //   var s = spreadOf(d);                 // depth -> scale factor
+  //
+  // Lateral spread has a floor (MIN_SPREAD) so the scene narrows with
+  // distance but never converges to a point — the ground keeps usable
+  // width at the horizon for distant hazards and landmarks.
   // ---------------------------------------------------------------------
   function horizonY() { return H * HORIZON_FRAC; }
   function vanishingX() { return W / 2; }
@@ -85,9 +86,15 @@
     return horizonY() + (playerY() - horizonY()) * d;
   }
 
+  // Lateral/size scale at depth d: 1 at the player, floored at MIN_SPREAD
+  // by the horizon instead of shrinking to zero.
+  function spreadOf(d) {
+    return MIN_SPREAD + (1 - MIN_SPREAD) * d;
+  }
+
   // Project an x defined at the player's depth to its position at depth d.
   function depthToX(xAtPlayer, d) {
-    return vanishingX() + (xAtPlayer - vanishingX()) * d;
+    return vanishingX() + (xAtPlayer - vanishingX()) * spreadOf(d);
   }
 
   // Depth of the bottom edge of the screen (a little behind the player).
@@ -113,9 +120,8 @@
   var state = STATE_TITLE;
   var distance = 0;          // metres walked
   var elapsed = 0;           // seconds since the timer started
-  var lane = 2;              // current lane, 1..LANES
-  var slide = null;          // active lane tween {fromX, toX, t}
-  var playerX = 0;           // player centre x at player depth, CSS pixels
+  var playerU = 0.5;         // player position across the promenade, 0..1
+  var targetU = 0.5;         // where the player is easing toward, 0..1
   var lastTime = 0;
 
   var startScreen = document.getElementById('start-screen');
@@ -123,16 +129,19 @@
   var endTimeEl = document.getElementById('end-time');
   var versionEl = document.getElementById('version');
   var walkAgainBtn = document.getElementById('walk-again');
-  var debugEl = document.getElementById('debug'); // TEMP swipe debug readout
 
   versionEl.textContent = 'v' + VERSION;
+
+  // Player centre x in CSS pixels at the player's depth.
+  function playerScreenX() {
+    return promenadeLeft() + promenadeWidth() * playerU;
+  }
 
   function resetRun() {
     distance = 0;
     elapsed = 0;
-    lane = 2;
-    slide = null;
-    playerX = laneCentreX(lane);
+    playerU = 0.5;
+    targetU = 0.5;
     state = STATE_READY;
   }
 
@@ -147,90 +156,89 @@
   }
 
   // ---------------------------------------------------------------------
-  // Lane movement — smooth eased slide, never an instant jump
+  // Movement — free horizontal movement across the promenade.
+  // targetU is where input wants the player; playerU eases toward it so
+  // dragging feels smooth rather than jittery. Both are clamped to [0, 1]
+  // (0 = beach kerb, 1 = building kerb) so the player can stand right on
+  // a boundary line but never cross into the beach or building zones.
   // ---------------------------------------------------------------------
-  function easeInOutQuad(t) {
-    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  function clamp01(v) {
+    return v < 0 ? 0 : (v > 1 ? 1 : v);
   }
 
-  function moveLane(dir) {
-    if (state !== STATE_READY && state !== STATE_WALKING) return;
-
-    var target = lane + dir;
-    if (target < 1 || target > LANES) return; // edge hazards come later
-
-    lane = target;
-    slide = { fromX: playerX, toX: laneCentreX(lane), t: 0 };
-
-    if (state === STATE_READY) startWalking(); // first movement starts the run
+  function canMove() {
+    return state === STATE_READY || state === STATE_WALKING;
   }
 
-  function updateSlide(dt) {
-    if (!slide) return;
-    slide.t += (dt * 1000) / LANE_SLIDE_MS;
-    if (slide.t >= 1) {
-      playerX = slide.toX;
-      slide = null;
-    } else {
-      playerX = slide.fromX + (slide.toX - slide.fromX) * easeInOutQuad(slide.t);
+  function setTargetFromScreenX(x) {
+    targetU = clamp01((x - promenadeLeft()) / promenadeWidth());
+  }
+
+  function updatePlayer(dt) {
+    // Held arrow keys steer the target at a constant speed
+    var dir = (rightHeld ? 1 : 0) - (leftHeld ? 1 : 0);
+    if (dir !== 0 && canMove()) {
+      targetU = clamp01(targetU + dir * KEY_SPEED * dt);
     }
+
+    // Ease toward the target — light smoothing, no instant snap
+    var ease = 1 - Math.exp(-FOLLOW_RATE * dt);
+    playerU = clamp01(playerU + (targetU - playerU) * ease);
   }
 
   // ---------------------------------------------------------------------
-  // Input — genuine swipe detection anywhere on screen, arrow keys on
-  // desktop. A lane change fires only when the finger travels far enough
-  // horizontally between touchstart and touchend; the direction comes
-  // purely from the sign of that horizontal delta, never from where on
-  // screen the touch began — so this is a swipe, not left/right zones.
-  //
-  // touchstart reads e.touches[0] (the active touch) and touchend reads
-  // e.changedTouches[0] (the touch that just lifted) — the correct pairing
-  // for mobile Safari and Chrome. startX is reset on every touchend so no
-  // stale start position can survive into a later gesture.
+  // Input — drag-to-follow touch anywhere on screen, held arrow keys on
+  // desktop. While a finger is down its horizontal position steers the
+  // player directly; lifting the finger leaves the player where they are.
   // ---------------------------------------------------------------------
-  var SWIPE_THRESHOLD = 45; // min horizontal travel in CSS px to count
-  var startX = null;
-  var startY = null;
+  var dragging = false;
+  var leftHeld = false;
+  var rightHeld = false;
 
   document.addEventListener('touchstart', function (e) {
     var t = e.touches[0];
-    if (!t) return;
-    startX = t.clientX;
-    startY = t.clientY;
+    if (!t || !canMove()) return;
+    dragging = true;
+    setTargetFromScreenX(t.clientX);
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function (e) {
+    var t = e.touches[0];
+    if (!t || !dragging || !canMove()) return;
+    setTargetFromScreenX(t.clientX);
+    if (state === STATE_READY) startWalking(); // first movement starts the run
   }, { passive: true });
 
   document.addEventListener('touchend', function (e) {
-    if (startX === null) return;
-    var t = e.changedTouches[0];
-    if (!t) { startX = startY = null; return; }
-    var dx = t.clientX - startX;
-    var dy = t.clientY - startY;
-    startX = startY = null; // reset every time — never strand a start point
-
-    if (debugEl) {
-      var fired = Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy);
-      debugEl.textContent =
-        'dx ' + Math.round(dx) + '  dy ' + Math.round(dy) + '  ' + (fired ? 'SWIPE' : 'tap');
-    }
-
-    // Decisive, mostly-horizontal drag only — taps and vertical drags ignored.
-    if (Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
-      moveLane(dx > 0 ? 1 : -1);
-    }
+    if (e.touches.length === 0) dragging = false;
   }, { passive: true });
 
   document.addEventListener('touchcancel', function () {
-    startX = startY = null; // abandoned gesture — clear unconditionally
+    dragging = false;
   }, { passive: true });
 
   document.addEventListener('keydown', function (e) {
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
-      moveLane(-1);
+      leftHeld = true;
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
-      moveLane(1);
+      rightHeld = true;
+    } else {
+      return;
     }
+    if (state === STATE_READY) startWalking(); // first movement starts the run
+  });
+
+  document.addEventListener('keyup', function (e) {
+    if (e.key === 'ArrowLeft') leftHeld = false;
+    else if (e.key === 'ArrowRight') rightHeld = false;
+  });
+
+  window.addEventListener('blur', function () {
+    leftHeld = false;
+    rightHeld = false;
+    dragging = false;
   });
 
   startScreen.addEventListener('click', function () {
@@ -249,12 +257,39 @@
   // Drawing — placeholder graphics, everything on canvas.
   // The world is drawn back to front: sky, sea and beach on the left,
   // promenade in the middle, buildings on the right, then the player.
+  // Every strip runs between its horizon corners (spread floored at
+  // MIN_SPREAD) and its bottom corners, so the whole scene shares one
+  // coherent wide-angle perspective.
   // ---------------------------------------------------------------------
 
   // Deterministic pseudo-random for stable building shapes and windows.
   function rand(seed) {
     var x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
     return x - Math.floor(x);
+  }
+
+  // Fill the quad a strip [xa..xb] (at player depth) covers on screen.
+  function fillStrip(xa, xb, colour) {
+    var hy = horizonY();
+    var dMax = bottomDepth();
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.moveTo(depthToX(xa, 0), hy);
+    ctx.lineTo(depthToX(xb, 0), hy);
+    ctx.lineTo(depthToX(xb, dMax), H);
+    ctx.lineTo(depthToX(xa, dMax), H);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Stroke the line a longitudinal edge at x (at player depth) makes.
+  function strokeEdge(x, colour, width) {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(depthToX(x, 0), horizonY());
+    ctx.lineTo(depthToX(x, bottomDepth()), H);
+    ctx.stroke();
   }
 
   function drawSky() {
@@ -279,7 +314,7 @@
     // Sea fills everything left of the beach's outer edge line
     ctx.fillStyle = '#2e6fa3';
     ctx.beginPath();
-    ctx.moveTo(vanishingX(), hy);
+    ctx.moveTo(depthToX(beachOuter, 0), hy);
     ctx.lineTo(0, hy);
     ctx.lineTo(0, H);
     ctx.lineTo(depthToX(beachOuter, dMax), H);
@@ -287,37 +322,19 @@
     ctx.fill();
 
     // Sandy strip between the sea and the promenade
-    ctx.fillStyle = '#e8c76f';
-    ctx.beginPath();
-    ctx.moveTo(vanishingX(), hy);
-    ctx.lineTo(depthToX(beachOuter, dMax), H);
-    ctx.lineTo(depthToX(promLeft, dMax), H);
-    ctx.closePath();
-    ctx.fill();
+    fillStrip(beachOuter, promLeft, '#e8c76f');
 
     // Foam line where sea meets sand
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(vanishingX(), hy);
-    ctx.lineTo(depthToX(beachOuter, dMax), H);
-    ctx.stroke();
+    strokeEdge(beachOuter, 'rgba(255, 255, 255, 0.55)', 2);
   }
 
   function drawPromenade() {
-    var hy = horizonY();
     var dMax = bottomDepth();
     var left = promenadeLeft();
     var right = left + promenadeWidth();
 
-    // Light sandy-grey trapezoid converging on the vanishing point
-    ctx.fillStyle = '#c9c2b4';
-    ctx.beginPath();
-    ctx.moveTo(vanishingX(), hy);
-    ctx.lineTo(depthToX(left, dMax), H);
-    ctx.lineTo(depthToX(right, dMax), H);
-    ctx.closePath();
-    ctx.fill();
+    // Light sandy-grey surface
+    fillStrip(left, right, '#c9c2b4');
 
     ctx.strokeStyle = 'rgba(90, 85, 75, 0.18)';
     ctx.lineWidth = 1;
@@ -334,24 +351,18 @@
       ctx.stroke();
     }
 
-    // Lane lines running from the vanishing point to the bottom edge
-    for (var i = 1; i < LANES * 2; i++) {
-      var x = left + (promenadeWidth() / (LANES * 2)) * i;
+    // Longitudinal tile grid lines narrowing toward the horizon
+    for (var i = 1; i < GRID_COLUMNS; i++) {
+      var x = left + (promenadeWidth() / GRID_COLUMNS) * i;
       ctx.beginPath();
-      ctx.moveTo(vanishingX(), hy);
+      ctx.moveTo(depthToX(x, 0), horizonY());
       ctx.lineTo(depthToX(x, dMax), H);
       ctx.stroke();
     }
 
     // Kerbs along both edges of the promenade
-    ctx.strokeStyle = 'rgba(90, 85, 75, 0.35)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(vanishingX(), hy);
-    ctx.lineTo(depthToX(left, dMax), H);
-    ctx.moveTo(vanishingX(), hy);
-    ctx.lineTo(depthToX(right, dMax), H);
-    ctx.stroke();
+    strokeEdge(left, 'rgba(90, 85, 75, 0.35)', 3);
+    strokeEdge(right, 'rgba(90, 85, 75, 0.35)', 3);
   }
 
   function drawBuildings() {
@@ -368,11 +379,12 @@
       var m = Math.max(b * BUILDING_METRES - distance, mBottom);
       var d = depthOf(m);
       var y = depthToY(d);
+      var s = spreadOf(d);
 
       var inset = 4 + rand(b) * (buildingWidth() * 0.2);
       var xL = depthToX(right + inset, d);
       var xR = depthToX(outer - 2, d);
-      var hgt = (H * 0.22 + rand(b + 57) * H * 0.1) * d;
+      var hgt = (H * 0.22 + rand(b + 57) * H * 0.1) * s;
 
       ctx.fillStyle = (b % 2 === 0) ? '#12233d' : '#152a47';
       ctx.fillRect(xL, y - hgt, xR - xL, hgt);
@@ -398,9 +410,9 @@
   }
 
   function drawPlayer(time) {
-    var x = playerX;
+    var x = playerScreenX();
     var y = playerY();
-    var bodyW = Math.min(laneWidth() * 0.7, 56);
+    var bodyW = Math.min(promenadeWidth() * 0.175, 56);
     var bodyH = bodyW * 1.5;
     var headR = bodyW * 0.42;
 
@@ -475,7 +487,7 @@
       }
     }
 
-    updateSlide(dt);
+    updatePlayer(dt);
 
     // Sky and side fills share the page background colour
     ctx.fillStyle = '#0a1628';
@@ -487,7 +499,6 @@
     drawBuildings();
 
     if (state !== STATE_TITLE) {
-      if (playerX === 0) playerX = laneCentreX(lane);
       drawPlayer(time);
       drawHUD();
     }
