@@ -1,5 +1,158 @@
 <!DOCTYPE html>
-<html>
-<head><title>Death Walk - Test</title></head>
-<body><h1>Push and Pages test - OK</h1></body>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0a1628">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Death Walk">
+  <title>Death Walk</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0a1628;
+      touch-action: none;
+      overscroll-behavior: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #game {
+      display: block;
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10, 22, 40, 0.92);
+      color: #fff;
+      text-align: center;
+      z-index: 10;
+      padding: 24px;
+    }
+
+    .overlay.hidden {
+      display: none;
+    }
+
+    .title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(64px, 18vw, 120px);
+      letter-spacing: 0.06em;
+      line-height: 0.95;
+      color: #ffffff;
+      text-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    }
+
+    .subtitle {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(15px, 4.2vw, 20px);
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #8fb4d9;
+      margin-top: 10px;
+    }
+
+    .prompt {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(14px, 4vw, 18px);
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      color: #ffd166;
+      margin-top: 56px;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+
+    .end-time {
+      font-family: 'DM Mono', monospace;
+      font-size: clamp(22px, 7vw, 34px);
+      color: #ffd166;
+      margin-top: 18px;
+    }
+
+    .btn {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(14px, 4vw, 18px);
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      color: #0a1628;
+      background: #ffd166;
+      border: none;
+      border-radius: 8px;
+      padding: 16px 36px;
+      margin-top: 48px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .btn:active {
+      transform: scale(0.96);
+    }
+
+    .version {
+      position: absolute;
+      bottom: calc(14px + env(safe-area-inset-bottom));
+      left: 0;
+      right: 0;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.35);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="start-screen" class="overlay">
+    <div class="title">DEATH WALK</div>
+    <div class="subtitle">Tiki Beach to Daytona</div>
+    <div class="prompt">TAP TO START</div>
+    <div class="version" id="version"></div>
+  </div>
+
+  <div id="end-screen" class="overlay hidden">
+    <div class="title">YOU MADE IT<br>TO DAYTONA</div>
+    <div class="end-time" id="end-time">0.0s</div>
+    <button class="btn" id="walk-again">WALK AGAIN</button>
+  </div>
+
+  <script src="js/scripts.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js');
+      });
+    }
+  </script>
+</body>
 </html>
