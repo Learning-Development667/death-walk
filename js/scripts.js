@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.3.0';
+  var VERSION = '0.4.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -43,16 +43,26 @@
 
   // ---------------------------------------------------------------------
   // Layout — widths are defined at the player's depth (d = 1).
-  // Beach strip on the left, buildings on the right, open promenade
-  // in between.
+  // The walkable promenade runs from the sea wall on the left to the
+  // building kerb on the right; the beach sits below and beyond the wall.
   // ---------------------------------------------------------------------
-  function beachWidth() { return W * 0.18; }
+
+  // Left edge of the walkable area — the sea-wall line. This is the
+  // Tiki Tumble trigger: a player standing at playerU === 0 is exactly
+  // on this line, and Phase 3's fall event fires when they step past it.
+  function wallX() { return W * 0.10; }
+
   function buildingWidth() { return W * 0.18; }
-  function promenadeWidth() { return W * 0.44; }
-  function promenadeLeft() { return (W - promenadeWidth()) / 2; }
+  function promenadeLeft() { return wallX(); }
+  function promenadeWidth() { return W * 0.72 - wallX(); }
+
+  function wallHeight() { return H * 0.06; }  // sea-wall drop at player depth
+  function wallCap() { return W * 0.035; }    // wall top thickness at player depth
+  function wallOuterX() { return wallX() - wallCap(); } // seaward face line
+  function shoreX() { return wallX() - W * 0.34; } // shoreline at player depth
 
   function playerY() {
-    return H * 0.78; // lower third of the screen
+    return H * 0.89; // close to the bottom edge, long view ahead
   }
 
   // ---------------------------------------------------------------------
@@ -305,27 +315,85 @@
     ctx.fillRect(0, hy - glowH, W, glowH);
   }
 
+  // The beach is a sunken plane: its vertical drop below the promenade
+  // grows with depth d (zero at the horizon, full drop at the player),
+  // so it shares the same horizon but visibly tilts away at a different
+  // angle to the main trapezoid — a lower area you would fall into,
+  // not a continuation of the walkable surface.
+  function sunkenY(d, dropAtPlayer) {
+    return depthToY(d) + dropAtPlayer * d;
+  }
+
   function drawBeach() {
     var hy = horizonY();
     var dMax = bottomDepth();
-    var promLeft = promenadeLeft();
-    var beachOuter = promLeft - beachWidth();
+    var xw = wallOuterX();              // sand starts at the seaward face
+    var xs = shoreX();
+    var sandDrop = wallHeight();        // sand starts at the wall's base
+    var shoreDrop = wallHeight() * 2.2; // and slopes further down to the sea
 
-    // Sea fills everything left of the beach's outer edge line
+    // Sea fills everything left of the shoreline
     ctx.fillStyle = '#2e6fa3';
     ctx.beginPath();
-    ctx.moveTo(depthToX(beachOuter, 0), hy);
+    ctx.moveTo(depthToX(xs, 0), hy);
     ctx.lineTo(0, hy);
     ctx.lineTo(0, H);
-    ctx.lineTo(depthToX(beachOuter, dMax), H);
+    ctx.lineTo(depthToX(xs, dMax), sunkenY(dMax, shoreDrop));
     ctx.closePath();
     ctx.fill();
 
-    // Sandy strip between the sea and the promenade
-    fillStrip(beachOuter, promLeft, '#e8c76f');
+    // Sloping sand between the base of the wall and the shoreline
+    ctx.fillStyle = '#e8c76f';
+    ctx.beginPath();
+    ctx.moveTo(depthToX(xw, 0), hy);
+    ctx.lineTo(depthToX(xs, 0), hy);
+    ctx.lineTo(depthToX(xs, dMax), sunkenY(dMax, shoreDrop));
+    ctx.lineTo(depthToX(xw, dMax), sunkenY(dMax, sandDrop));
+    ctx.closePath();
+    ctx.fill();
 
     // Foam line where sea meets sand
-    strokeEdge(beachOuter, 'rgba(255, 255, 255, 0.55)', 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(depthToX(xs, 0), hy);
+    ctx.lineTo(depthToX(xs, dMax), sunkenY(dMax, shoreDrop));
+    ctx.stroke();
+  }
+
+  // The sea wall — the visible boundary of the walkable area and the
+  // future Tiki Tumble edge. A shadowed face drops from the promenade
+  // edge to the sand, capped by a bright kerb line so the boundary is
+  // unmistakable.
+  function drawWall() {
+    var hy = horizonY();
+    var dMax = bottomDepth();
+    var xo = wallOuterX();
+
+    // Seaward drop face, hanging from the cap's outer edge down to the
+    // sand — grows from nothing at the horizon to full height
+    ctx.fillStyle = '#5c5548';
+    ctx.beginPath();
+    ctx.moveTo(depthToX(xo, 0), hy);
+    ctx.lineTo(depthToX(xo, dMax), H);
+    ctx.lineTo(depthToX(xo, dMax), sunkenY(dMax, wallHeight()));
+    ctx.closePath();
+    ctx.fill();
+
+    // Shadow where the wall base meets the sand, deepening the drop
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.30)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(depthToX(xo, 0), hy);
+    ctx.lineTo(depthToX(xo, dMax), sunkenY(dMax, wallHeight()));
+    ctx.stroke();
+
+    // Light cap — the wall's visible top surface, giving it thickness
+    fillStrip(xo, wallX(), '#f2e9d8');
+
+    // Crisp edges either side of the cap
+    strokeEdge(xo, '#ffffff', 1);
+    strokeEdge(wallX(), 'rgba(90, 85, 75, 0.55)', 2);
   }
 
   function drawPromenade() {
@@ -360,8 +428,7 @@
       ctx.stroke();
     }
 
-    // Kerbs along both edges of the promenade
-    strokeEdge(left, 'rgba(90, 85, 75, 0.35)', 3);
+    // Kerb along the building edge; the sea wall marks the left edge
     strokeEdge(right, 'rgba(90, 85, 75, 0.35)', 3);
   }
 
@@ -495,6 +562,7 @@
 
     drawSky();
     drawBeach();
+    drawWall();
     drawPromenade();
     drawBuildings();
 
