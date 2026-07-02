@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.4.0';
+  var VERSION = '0.4.1';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -56,9 +56,16 @@
   function promenadeLeft() { return wallX(); }
   function promenadeWidth() { return W * 0.72 - wallX(); }
 
-  function wallHeight() { return H * 0.06; }  // sea-wall drop at player depth
-  function wallCap() { return W * 0.035; }    // wall top thickness at player depth
-  function wallOuterX() { return wallX() - wallCap(); } // seaward face line
+  // Total drop from the promenade edge down to the sand, at the player's
+  // depth. Grows with distance walked: a shallow step near Tiki Beach,
+  // a serious ledge by the time Daytona is close.
+  function dropHeight() {
+    return H * (0.025 + 0.045 * (distance / RUN_DISTANCE));
+  }
+
+  var LEDGE_STEPS = 3;                        // drops in the stepped ledge
+  function stepTread() { return W * 0.04; }   // tread width at player depth
+  function ledgeOuterX() { return wallX() - stepTread() * (LEDGE_STEPS - 1); }
   function shoreX() { return wallX() - W * 0.34; } // shoreline at player depth
 
   function playerY() {
@@ -327,10 +334,10 @@
   function drawBeach() {
     var hy = horizonY();
     var dMax = bottomDepth();
-    var xw = wallOuterX();              // sand starts at the seaward face
+    var xw = ledgeOuterX();             // sand starts at the ledge's base
     var xs = shoreX();
-    var sandDrop = wallHeight();        // sand starts at the wall's base
-    var shoreDrop = wallHeight() * 2.2; // and slopes further down to the sea
+    var sandDrop = dropHeight();        // sand sits at the base of the drop
+    var shoreDrop = dropHeight() + H * 0.075; // constant extra slope to the sea
 
     // Sea fills everything left of the shoreline
     ctx.fillStyle = '#2e6fa3';
@@ -361,39 +368,54 @@
     ctx.stroke();
   }
 
-  // The sea wall — the visible boundary of the walkable area and the
-  // future Tiki Tumble edge. A shadowed face drops from the promenade
-  // edge to the sand, capped by a bright kerb line so the boundary is
-  // unmistakable.
-  function drawWall() {
+  // The boardwalk ledge — the visible boundary of the walkable area and
+  // the future Tiki Tumble edge. The promenade ends at wallX() and steps
+  // down onto the sand over flat treads, the total drop growing with
+  // distance walked (see dropHeight()). The steps descend seaward, so
+  // their vertical faces point away from the camera — each step reads as
+  // a tread plus a dark seam at the edge above it, and the promenade
+  // (drawn after) naturally occludes whatever the lip hides at this
+  // grazing angle.
+  function drawLedge() {
     var hy = horizonY();
     var dMax = bottomDepth();
-    var xo = wallOuterX();
+    var drop = dropHeight();
+    var faceH = drop / LEDGE_STEPS;
 
-    // Seaward drop face, hanging from the cap's outer edge down to the
-    // sand — grows from nothing at the horizon to full height
-    ctx.fillStyle = '#5c5548';
-    ctx.beginPath();
-    ctx.moveTo(depthToX(xo, 0), hy);
-    ctx.lineTo(depthToX(xo, dMax), H);
-    ctx.lineTo(depthToX(xo, dMax), sunkenY(dMax, wallHeight()));
-    ctx.closePath();
-    ctx.fill();
+    for (var s = 0; s < LEDGE_STEPS - 1; s++) {
+      var x = wallX() - stepTread() * s;         // tread's inner edge line
+      var xNext = x - stepTread();
+      var o = faceH * (s + 1);                   // this tread's drop offset
 
-    // Shadow where the wall base meets the sand, deepening the drop
+      // Flat tread
+      ctx.fillStyle = (s % 2 === 0) ? '#b8ac97' : '#aca08b';
+      ctx.beginPath();
+      ctx.moveTo(depthToX(x, 0), hy);
+      ctx.lineTo(depthToX(xNext, 0), hy);
+      ctx.lineTo(depthToX(xNext, dMax), sunkenY(dMax, o));
+      ctx.lineTo(depthToX(x, dMax), sunkenY(dMax, o));
+      ctx.closePath();
+      ctx.fill();
+
+      // Dark seam along the tread's inner (higher) edge
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(depthToX(x, 0), hy);
+      ctx.lineTo(depthToX(x, dMax), sunkenY(dMax, o));
+      ctx.stroke();
+    }
+
+    // Shadow where the ledge base meets the sand
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.30)';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(depthToX(xo, 0), hy);
-    ctx.lineTo(depthToX(xo, dMax), sunkenY(dMax, wallHeight()));
+    ctx.moveTo(depthToX(ledgeOuterX(), 0), hy);
+    ctx.lineTo(depthToX(ledgeOuterX(), dMax), sunkenY(dMax, drop));
     ctx.stroke();
 
-    // Light cap — the wall's visible top surface, giving it thickness
-    fillStrip(xo, wallX(), '#f2e9d8');
-
-    // Crisp edges either side of the cap
-    strokeEdge(xo, '#ffffff', 1);
-    strokeEdge(wallX(), 'rgba(90, 85, 75, 0.55)', 2);
+    // Bright lip along the promenade's edge — the Tiki Tumble line
+    strokeEdge(wallX(), '#f2e9d8', 3);
   }
 
   function drawPromenade() {
@@ -479,7 +501,7 @@
   function drawPlayer(time) {
     var x = playerScreenX();
     var y = playerY();
-    var bodyW = Math.min(promenadeWidth() * 0.175, 56);
+    var bodyW = Math.min(promenadeWidth() * 0.14, 46);
     var bodyH = bodyW * 1.5;
     var headR = bodyW * 0.42;
 
@@ -562,7 +584,7 @@
 
     drawSky();
     drawBeach();
-    drawWall();
+    drawLedge();
     drawPromenade();
     drawBuildings();
 
