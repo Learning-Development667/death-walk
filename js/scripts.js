@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.4.2';
+  var VERSION = '0.5.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -136,10 +136,18 @@
 
   var state = STATE_TITLE;
   var distance = 0;          // metres walked
-  var elapsed = 0;           // seconds since the timer started
+  var elapsed = 0;           // run clock in seconds (collisions add penalties)
   var playerU = 0.5;         // player position across the promenade, 0..1
   var targetU = 0.5;         // where the player is easing toward, 0..1
   var lastTime = 0;
+  var frameNow = 0;          // current rAF timestamp, ms
+
+  // Collision effect timers (rAF-clock ms) and skid state
+  var invulnUntil = 0;       // no repeat hits while this is in the future
+  var shakeUntil = 0;        // screen shake window after a stumble
+  var flashUntil = 0;        // player flash window after a stumble
+  var skidUntil = 0;         // control lost while sliding on puke
+  var skidVel = 0;           // sideways slip, promenade-widths per second
 
   var startScreen = document.getElementById('start-screen');
   var endScreen = document.getElementById('end-screen');
@@ -154,11 +162,22 @@
     return promenadeLeft() + promenadeWidth() * playerU;
   }
 
+  function playerWidth() {
+    return Math.min(promenadeWidth() * 0.14, 46);
+  }
+
   function resetRun() {
     distance = 0;
     elapsed = 0;
     playerU = 0.5;
     targetU = 0.5;
+    hazards.length = 0;
+    spawnTimer = 1.5; // grace period before the first hazard
+    invulnUntil = 0;
+    shakeUntil = 0;
+    flashUntil = 0;
+    skidUntil = 0;
+    skidVel = 0;
     state = STATE_READY;
   }
 
@@ -192,6 +211,15 @@
   }
 
   function updatePlayer(dt) {
+    // Skidding on puke: the player slips sideways with no control until
+    // the skid window ends, then resumes from wherever they ended up.
+    if (frameNow < skidUntil) {
+      playerU = clamp01(playerU + skidVel * dt);
+      skidVel *= Math.pow(0.02, dt); // slide dies away quickly
+      targetU = playerU;
+      return;
+    }
+
     // Held arrow keys steer the target at a constant speed
     var dir = (rightHeld ? 1 : 0) - (leftHeld ? 1 : 0);
     if (dir !== 0 && canMove()) {
@@ -269,6 +297,187 @@
     endScreen.classList.add('hidden');
     resetRun();
   });
+
+  // ---------------------------------------------------------------------
+  // Hazards — data-driven: each type is a config entry, and adding a new
+  // hazard type means adding an entry here, not writing new logic.
+  //
+  //   speed    m/s toward the player, independent of the walk speed
+  //   spawn    [nearest, furthest] metres ahead to appear at
+  //   width    collision + draw width in px at the player's depth
+  //   drift    constant sideways speed in promenade-widths/sec (random
+  //            direction per hazard; 0 = locked straight)
+  //   wander   sinusoidal wander instead of drift: [amplitude, Hz]
+  //   group    [min, max] members walking together (hen parties)
+  //   ground   static patch stuck to the promenade surface
+  //   effect   'stumble' (invuln + shake + flash + penalty) or 'skid'
+  //   penalty  seconds added to the run clock on collision
+  //   weight   relative spawn frequency
+  //   colour   placeholder shape colour until real art lands
+  // ---------------------------------------------------------------------
+  var HAZARD_TYPES = {
+    pedestrian: { speed: 1.2, spawn: [50, 80],  width: 30, drift: 0.012,
+                  effect: 'stumble', penalty: 2, weight: 26, colour: '#7fb069' },
+    jogger:     { speed: 4.5, spawn: [60, 100], width: 26, drift: 0,
+                  effect: 'stumble', penalty: 2, weight: 18, colour: '#f77f00' },
+    scooter:    { speed: 6.0, spawn: [25, 45],  width: 42, drift: 0.08,
+                  effect: 'stumble', penalty: 2, weight: 14, colour: '#9d4edd' },
+    henParty:   { speed: 1.6, spawn: [50, 80],  width: 20, wander: [0.22, 0.25],
+                  group: [2, 3],
+                  effect: 'stumble', penalty: 2, weight: 12, colour: '#ff70a6' },
+    performer:  { speed: 0.15, spawn: [50, 110], width: 24, drift: 0,
+                  effect: 'stumble', penalty: 2, weight: 12, colour: '#25ced1' },
+    puke:       { speed: 0,   spawn: [40, 70],  width: 44, drift: 0, ground: true,
+                  effect: 'skid', penalty: 0, weight: 18, colour: '#8aa62f' },
+  };
+
+  var SPAWN_INTERVAL_START = 2.5; // seconds between spawns at 0m
+  var SPAWN_INTERVAL_END = 1.4;   // and by the 400m mark
+  var STUMBLE_INVULN_MS = 1200;
+  var STUMBLE_SHAKE_MS = 450;
+  var STUMBLE_FLASH_MS = 700;
+  var SKID_MS = 380;
+  var SKID_SPEED = 0.55;          // initial sideways slip, widths/sec
+
+  var hazards = [];
+  var spawnTimer = 1.5;
+
+  function spawnInterval() {
+    var t = distance / RUN_DISTANCE;
+    return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_END - SPAWN_INTERVAL_START) * t;
+  }
+
+  function pickHazardType() {
+    var total = 0;
+    var key;
+    for (key in HAZARD_TYPES) total += HAZARD_TYPES[key].weight;
+    var r = Math.random() * total;
+    for (key in HAZARD_TYPES) {
+      r -= HAZARD_TYPES[key].weight;
+      if (r <= 0) return key;
+    }
+    return 'pedestrian';
+  }
+
+  function spawnHazard() {
+    var key = pickHazardType();
+    var cfg = HAZARD_TYPES[key];
+    var h = {
+      key: key,
+      cfg: cfg,
+      worldZ: distance + cfg.spawn[0] + Math.random() * (cfg.spawn[1] - cfg.spawn[0]),
+      age: 0,
+      hit: false, // ground patches only trigger once
+      members: null,
+      driftVel: 0,
+      wanderAmp: 0,
+      wanderOmega: 0,
+      phase: 0,
+      u0: 0,
+      u: 0,
+    };
+
+    if (cfg.wander) {
+      h.wanderAmp = cfg.wander[0];
+      h.wanderOmega = cfg.wander[1] * Math.PI * 2;
+      h.phase = Math.random() * Math.PI * 2;
+      var margin = h.wanderAmp + 0.06;
+      h.u0 = margin + Math.random() * (1 - margin * 2);
+    } else {
+      h.u0 = 0.06 + Math.random() * 0.88;
+      if (cfg.drift) h.driftVel = cfg.drift * (Math.random() < 0.5 ? -1 : 1);
+    }
+    h.u = h.u0;
+
+    if (cfg.group) {
+      var count = cfg.group[0] +
+        Math.floor(Math.random() * (cfg.group[1] - cfg.group[0] + 1));
+      h.members = [];
+      for (var i = 0; i < count; i++) {
+        h.members.push({
+          du: (i - (count - 1) / 2) * 0.055 + (Math.random() - 0.5) * 0.02,
+          dz: (Math.random() - 0.5) * 2.5,
+        });
+      }
+    }
+
+    hazards.push(h);
+  }
+
+  // Overlap test at the player's depth between the player's body and a
+  // point at position u with the given width (px at player depth).
+  function overlapsPlayer(u, widthPx) {
+    var hx = promenadeLeft() + promenadeWidth() * u;
+    var gap = Math.abs(hx - playerScreenX());
+    return gap < (playerWidth() + widthPx) * 0.5 * 0.8; // slight forgiveness
+  }
+
+  function triggerStumble(cfg) {
+    invulnUntil = frameNow + STUMBLE_INVULN_MS;
+    shakeUntil = frameNow + STUMBLE_SHAKE_MS;
+    flashUntil = frameNow + STUMBLE_FLASH_MS;
+    elapsed += cfg.penalty; // time penalty straight onto the run clock
+  }
+
+  function triggerSkid(h) {
+    h.hit = true;
+    skidUntil = frameNow + SKID_MS;
+    // Slip away from the patch's centre — or a random way if dead-centre
+    var away = playerU === h.u ? (Math.random() < 0.5 ? -1 : 1)
+                               : (playerU < h.u ? -1 : 1);
+    skidVel = away * SKID_SPEED;
+    elapsed += h.cfg.penalty;
+  }
+
+  function updateHazards(dt) {
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnHazard();
+      spawnTimer = spawnInterval();
+    }
+
+    for (var i = hazards.length - 1; i >= 0; i--) {
+      var h = hazards[i];
+      var cfg = h.cfg;
+      h.age += dt;
+      h.worldZ -= cfg.speed * dt;
+
+      if (h.wanderAmp) {
+        h.u = h.u0 + h.wanderAmp * Math.sin(h.phase + h.wanderOmega * h.age);
+      } else if (h.driftVel) {
+        h.u += h.driftVel * dt;
+      }
+
+      var m = h.worldZ - distance;
+
+      // Cleanup: fully past the player, or drifted off the promenade
+      if (m < bottomMetres() - 2 || h.u < -0.05 || h.u > 1.05) {
+        hazards.splice(i, 1);
+        continue;
+      }
+
+      // Collisions, checked at the player's depth
+      if (cfg.ground) {
+        if (!h.hit && frameNow >= skidUntil &&
+            Math.abs(m) < 1.0 && overlapsPlayer(h.u, cfg.width)) {
+          triggerSkid(h);
+        }
+      } else if (frameNow >= invulnUntil) {
+        if (h.members) {
+          for (var j = 0; j < h.members.length; j++) {
+            var mem = h.members[j];
+            if (Math.abs(m + mem.dz) < 0.6 &&
+                overlapsPlayer(h.u + mem.du, cfg.width)) {
+              triggerStumble(cfg);
+              break;
+            }
+          }
+        } else if (Math.abs(m) < 0.6 && overlapsPlayer(h.u, cfg.width)) {
+          triggerStumble(cfg);
+        }
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------
   // Drawing — placeholder graphics, everything on canvas.
@@ -501,7 +710,7 @@
   function drawPlayer(time) {
     var x = playerScreenX();
     var y = playerY();
-    var bodyW = Math.min(promenadeWidth() * 0.14, 46);
+    var bodyW = playerWidth();
     var bodyH = bodyW * 1.5;
     var headR = bodyW * 0.42;
 
@@ -517,8 +726,9 @@
     ctx.ellipse(x, y + bodyH * 0.55, bodyW * 0.75, bodyW * 0.3, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Body — rounded rectangle
-    ctx.fillStyle = '#e63946';
+    // Body — rounded rectangle, flickering white during a stumble
+    var flashing = time < flashUntil && Math.floor(time / 70) % 2 === 0;
+    ctx.fillStyle = flashing ? '#ffffff' : '#e63946';
     roundRect(x - bodyW / 2, y - bodyH / 2 + bob, bodyW, bodyH, bodyW * 0.35);
     ctx.fill();
 
@@ -537,6 +747,121 @@
     ctx.arcTo(x, y + h, x, y, r);
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
+  }
+
+  // A simple standing figure: shadow, rounded body, head. Used by most
+  // hazard types with different widths/heights/colours.
+  function drawFigure(x, feetY, w, h, colour) {
+    var headR = w * 0.4;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.beginPath();
+    ctx.ellipse(x, feetY, w * 0.7, w * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = colour;
+    roundRect(x - w / 2, feetY - h, w, h, w * 0.35);
+    ctx.fill();
+
+    ctx.fillStyle = '#f4d1ae';
+    ctx.beginPath();
+    ctx.arc(x, feetY - h - headR * 0.6, headR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawHazard(h, m) {
+    var cfg = h.cfg;
+
+    // Static puke patch, flat on the promenade surface
+    if (cfg.ground) {
+      var d = depthOf(m);
+      var s = spreadOf(d);
+      var x = depthToX(promenadeLeft() + promenadeWidth() * h.u, d);
+      var y = depthToY(d);
+      var rx = cfg.width * 0.5 * s;
+
+      ctx.fillStyle = cfg.colour;
+      ctx.beginPath();
+      ctx.ellipse(x, y, rx, rx * 0.34, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+      ctx.beginPath();
+      ctx.ellipse(x - rx * 0.3, y + rx * 0.05, rx * 0.35, rx * 0.13, 0, 0, Math.PI * 2);
+      ctx.ellipse(x + rx * 0.4, y - rx * 0.04, rx * 0.22, rx * 0.09, 0, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    // Hen parties: draw every member of the group
+    if (h.members) {
+      for (var i = 0; i < h.members.length; i++) {
+        var mem = h.members[i];
+        var dm = m + mem.dz;
+        if (dm > DRAW_DISTANCE || dm < bottomMetres()) continue;
+        var dd = depthOf(dm);
+        var ss = spreadOf(dd);
+        var xx = depthToX(promenadeLeft() + promenadeWidth() * (h.u + mem.du), dd);
+        var ww = cfg.width * ss;
+        drawFigure(xx, depthToY(dd), ww, ww * 1.45, cfg.colour);
+      }
+      return;
+    }
+
+    var d2 = depthOf(m);
+    var s2 = spreadOf(d2);
+    var x2 = depthToX(promenadeLeft() + promenadeWidth() * h.u, d2);
+    var y2 = depthToY(d2);
+    var w2 = cfg.width * s2;
+
+    if (h.key === 'scooter') {
+      // Low, wide platform with a seated rider
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(x2, y2, w2 * 0.62, w2 * 0.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = cfg.colour;
+      roundRect(x2 - w2 / 2, y2 - w2 * 0.32, w2, w2 * 0.32, w2 * 0.12);
+      ctx.fill();
+      drawFigure(x2, y2 - w2 * 0.28, w2 * 0.5, w2 * 0.55, cfg.colour);
+      return;
+    }
+
+    if (h.key === 'jogger') {
+      // Taller and slimmer, with a lean in their drift-free hustle
+      drawFigure(x2, y2, w2, w2 * 2.0, cfg.colour);
+      return;
+    }
+
+    if (h.key === 'performer') {
+      // Small figure plus a pitch marker so they read as parked
+      drawFigure(x2, y2, w2, w2 * 1.4, cfg.colour);
+      ctx.fillStyle = '#ffd166';
+      ctx.beginPath();
+      ctx.moveTo(x2 + w2 * 0.9, y2);
+      ctx.lineTo(x2 + w2 * 1.15, y2);
+      ctx.lineTo(x2 + w2 * 1.02, y2 - w2 * 0.55);
+      ctx.closePath();
+      ctx.fill();
+      return;
+    }
+
+    // Pedestrians and anything without a bespoke shape
+    drawFigure(x2, y2, w2, w2 * 1.5, cfg.colour);
+  }
+
+  // Hazards still ahead of the player (drawn before them) vs already
+  // passed (drawn over them), each far-to-near so overlaps stack right.
+  function drawHazards(behindPlayer) {
+    var sorted = hazards.slice().sort(function (a, b) {
+      return b.worldZ - a.worldZ;
+    });
+    for (var i = 0; i < sorted.length; i++) {
+      var m = sorted[i].worldZ - distance;
+      if (m > DRAW_DISTANCE) continue;
+      if (behindPlayer ? m >= 0 : m < 0) continue;
+      drawHazard(sorted[i], m);
+    }
   }
 
   function drawHUD() {
@@ -566,10 +891,12 @@
   function frame(time) {
     var dt = lastTime ? Math.min((time - lastTime) / 1000, 0.05) : 0;
     lastTime = time;
+    frameNow = time;
 
     if (state === STATE_WALKING) {
       distance += WALK_SPEED * dt;
       elapsed += dt;
+      updateHazards(dt);
       if (distance >= RUN_DISTANCE) {
         distance = RUN_DISTANCE;
         finishRun();
@@ -578,9 +905,16 @@
 
     updatePlayer(dt);
 
+    // Screen shake after a stumble — the whole scene judders briefly
+    var shaking = time < shakeUntil;
+    if (shaking) {
+      ctx.save();
+      ctx.translate((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
+    }
+
     // Sky and side fills share the page background colour
     ctx.fillStyle = '#0a1628';
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(-8, -8, W + 16, H + 16);
 
     drawSky();
     drawBeach();
@@ -589,7 +923,14 @@
     drawBuildings();
 
     if (state !== STATE_TITLE) {
+      drawHazards(false); // still ahead of the player
       drawPlayer(time);
+      drawHazards(true);  // already passed, closer to the camera
+    }
+
+    if (shaking) ctx.restore();
+
+    if (state !== STATE_TITLE) {
       drawHUD();
     }
 
