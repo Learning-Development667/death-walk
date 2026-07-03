@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.6.2';
+  var VERSION = '0.7.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -173,6 +173,10 @@
     targetU = 0.5;
     hazards.length = 0;
     spawnTimer = 0.02; // hazards from the very first walking frame
+    pickups.length = 0;
+    pickupTimer = 3;
+    drunk = 0;
+    inputLog.length = 0;
     invulnUntil = 0;
     shakeUntil = 0;
     flashUntil = 0;
@@ -226,9 +230,50 @@
       targetU = clamp01(targetU + dir * KEY_SPEED * dt);
     }
 
-    // Ease toward the target — light smoothing, no instant snap
+    // Record raw input; the avatar responds to a delayed copy of it,
+    // the delay growing with the drunk meter (input lag).
+    inputLog.push({ t: frameNow, u: targetU });
+    while (inputLog.length > 1 && inputLog[0].t < frameNow - 3000) {
+      inputLog.shift();
+    }
+
+    // Involuntary sway layers on top of the (lagged) input — the player
+    // fights the drift, they aren't locked out by it.
+    var goal = laggedTargetU();
+    if (state === STATE_WALKING && drunk > 0) {
+      goal = clamp01(goal + swayOffset());
+    }
+
+    // Ease toward the goal — light smoothing, no instant snap
     var ease = 1 - Math.exp(-FOLLOW_RATE * dt);
-    playerU = clamp01(playerU + (targetU - playerU) * ease);
+    playerU = clamp01(playerU + (goal - playerU) * ease);
+  }
+
+  // The raw target as the avatar perceives it: the input sample from
+  // (drunk × LAG_PER_BEER_MS) milliseconds ago.
+  function laggedTargetU() {
+    var lagMs = drunk * LAG_PER_BEER_MS;
+    if (lagMs <= 0 || inputLog.length === 0) return targetU;
+    var cutoff = frameNow - lagMs;
+    var u = inputLog[0].u; // input older than the whole log: use oldest
+    for (var i = inputLog.length - 1; i >= 0; i--) {
+      if (inputLog[i].t <= cutoff) {
+        u = inputLog[i].u;
+        break;
+      }
+    }
+    return u;
+  }
+
+  // Side-to-side drift that grows in amplitude and frequency with the
+  // meter. Two offset sine waves so it feels organic, not metronomic.
+  function swayOffset() {
+    var t = frameNow / 1000;
+    var freq = SWAY_FREQ_BASE + SWAY_FREQ_PER_BEER * drunk;
+    return drunk * SWAY_AMP_PER_BEER * (
+      Math.sin(Math.PI * 2 * freq * t) +
+      0.5 * Math.sin(Math.PI * 2 * freq * 1.7 * t + 1.3)
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -384,6 +429,38 @@
     return items;
   }
 
+  // ---------------------------------------------------------------------
+  // Pickups and the drunk meter — the signature mechanic. Data-driven
+  // like hazards: a future power-up (water, coffee, kebab) is one entry
+  // here with its own `drunk` delta (negative to sober up), not new
+  // logic. Pickups sit on the promenade and are collected by walking
+  // into them — no penalty, no stumble.
+  //
+  //   spawn   [nearest, furthest] metres ahead to appear at
+  //   width   collection + draw width in px at the player's depth
+  //   drunk   change to the drunk meter on collection
+  //   weight  relative spawn frequency (matters once there are more)
+  //   colour  placeholder silhouette colour
+  // ---------------------------------------------------------------------
+  var PICKUP_TYPES = {
+    beer: { spawn: [45, 80], width: 20, drunk: 1, weight: 1, colour: '#ffc233' },
+  };
+
+  var PICKUP_INTERVAL_MIN = 5.5;  // seconds between pickup spawns
+  var PICKUP_INTERVAL_MAX = 8.5;
+
+  // Drunk tuning — deliberately surfaced as constants for playtesting
+  var LAG_PER_BEER_MS = 100;      // added input-to-response delay per beer
+  var SWAY_AMP_PER_BEER = 0.016;  // involuntary drift, promenade-widths per beer
+  var SWAY_FREQ_BASE = 0.5;       // sway cycles per second when barely drunk
+  var SWAY_FREQ_PER_BEER = 0.06;  // and how much faster it gets per beer
+  var DRUNK_METER_MAX = 8;        // meter display cap (value itself is uncapped)
+
+  var pickups = [];
+  var pickupTimer = 3;
+  var drunk = 0;                  // 0 = sober, +1 per beer
+  var inputLog = [];              // recent {t, u} raw input samples for lag
+
   var SPAWN_INTERVAL_START = 1.3; // seconds between spawns at 0m
   var SPAWN_INTERVAL_END = 0.8;   // and by the 400m mark
   var STUMBLE_INVULN_MS = 1200;
@@ -400,20 +477,22 @@
     return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_END - SPAWN_INTERVAL_START) * t;
   }
 
-  function pickHazardType() {
+  function weightedPick(types) {
     var total = 0;
     var key;
-    for (key in HAZARD_TYPES) total += HAZARD_TYPES[key].weight;
+    var last = null;
+    for (key in types) total += types[key].weight;
     var r = Math.random() * total;
-    for (key in HAZARD_TYPES) {
-      r -= HAZARD_TYPES[key].weight;
+    for (key in types) {
+      last = key;
+      r -= types[key].weight;
       if (r <= 0) return key;
     }
-    return 'pedestrian';
+    return last;
   }
 
   function spawnHazard() {
-    var key = pickHazardType();
+    var key = weightedPick(HAZARD_TYPES);
     var cfg = HAZARD_TYPES[key];
     var h = {
       key: key,
@@ -554,6 +633,43 @@
           triggerStumble(it.cfg);
           break;
         }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Pickup spawning and collection — separate from hazards: walking
+  // into a pickup collects it (applies its `drunk` delta to the meter)
+  // and removes it from the world. No penalty, no invulnerability.
+  // ---------------------------------------------------------------------
+  function spawnPickup() {
+    var key = weightedPick(PICKUP_TYPES);
+    var cfg = PICKUP_TYPES[key];
+    pickups.push({
+      key: key,
+      cfg: cfg,
+      pickup: true,
+      worldZ: distance + cfg.spawn[0] + Math.random() * (cfg.spawn[1] - cfg.spawn[0]),
+      u: 0.1 + Math.random() * 0.8,
+    });
+  }
+
+  function updatePickups(dt) {
+    pickupTimer -= dt;
+    if (pickupTimer <= 0) {
+      spawnPickup();
+      pickupTimer = PICKUP_INTERVAL_MIN +
+        Math.random() * (PICKUP_INTERVAL_MAX - PICKUP_INTERVAL_MIN);
+    }
+
+    for (var i = pickups.length - 1; i >= 0; i--) {
+      var p = pickups[i];
+      var m = p.worldZ - distance;
+      if (m < bottomMetres() - 2) {
+        pickups.splice(i, 1); // missed it — gone below the screen
+      } else if (Math.abs(m) < 0.7 && overlapsPlayer(p.u, p.cfg.width)) {
+        drunk = Math.max(0, drunk + p.cfg.drunk);
+        pickups.splice(i, 1); // collected
       }
     }
   }
@@ -1121,12 +1237,46 @@
     ctx.fill();
   }
 
-  // Hazards and fixed scenery drawn together, far-to-near so overlaps
-  // stack correctly; split around the player's depth so passed objects
-  // draw over them.
+  // A pint on the promenade: glass of amber with a foam head and a
+  // little handle — nothing else in the world is this shape or colour.
+  function drawPickup(p, m) {
+    var cfg = p.cfg;
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var x = depthToX(promenadeLeft() + promenadeWidth() * p.u, d);
+    var y = depthToY(d);
+    var w = cfg.width * s;
+    var gh = w * 1.15; // glass height
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.5, w * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = cfg.colour; // the beer
+    roundRect(x - w * 0.4, y - gh, w * 0.8, gh, w * 0.12);
+    ctx.fill();
+
+    ctx.strokeStyle = cfg.colour; // handle
+    ctx.lineWidth = Math.max(1.5, w * 0.14);
+    ctx.beginPath();
+    ctx.arc(x + w * 0.48, y - gh * 0.5, gh * 0.26, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff6e0'; // foam head
+    ctx.beginPath();
+    ctx.ellipse(x, y - gh, w * 0.46, w * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Hazards, scenery, and pickups drawn together, far-to-near so
+  // overlaps stack correctly; split around the player's depth so passed
+  // objects draw over them.
   function drawWorldObjects(behindPlayer) {
     var items = sceneryItems();
-    for (var i = 0; i < hazards.length; i++) items.push(hazards[i]);
+    var i;
+    for (i = 0; i < hazards.length; i++) items.push(hazards[i]);
+    for (i = 0; i < pickups.length; i++) items.push(pickups[i]);
     items.sort(function (a, b) { return b.worldZ - a.worldZ; });
 
     for (var j = 0; j < items.length; j++) {
@@ -1134,6 +1284,7 @@
       if (m > DRAW_DISTANCE) continue;
       if (behindPlayer ? m >= 0 : m < 0) continue;
       if (items[j].scenery) drawScenery(items[j], m);
+      else if (items[j].pickup) drawPickup(items[j], m);
       else drawHazard(items[j], m);
     }
   }
@@ -1157,6 +1308,26 @@
     ctx.fillStyle = '#ffd166';
     ctx.textAlign = 'right';
     ctx.fillText(elapsed.toFixed(1) + 's', W - 14, stripH / 2);
+
+    // Drunk meter, centre of the strip
+    var mw = 80;
+    var mh = 8;
+    var mx = W / 2 - mw / 2;
+    var my = stripH / 2 + 3;
+
+    ctx.font = '9px "DM Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.fillText('DRUNK', W / 2, stripH / 2 - 8);
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(mx, my, mw, mh);
+    if (drunk > 0) {
+      ctx.fillStyle = '#ffc233';
+      ctx.fillRect(mx + 1, my + 1,
+        (mw - 2) * Math.min(drunk / DRUNK_METER_MAX, 1), mh - 2);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -1171,6 +1342,7 @@
       distance += WALK_SPEED * dt;
       elapsed += dt;
       updateHazards(dt);
+      updatePickups(dt);
       if (distance >= RUN_DISTANCE) {
         distance = RUN_DISTANCE;
         finishRun();

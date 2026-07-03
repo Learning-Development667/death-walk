@@ -1,7 +1,7 @@
 // Death Walk service worker
 // Network-first, cache fallback only when offline. Never cache-first.
 
-const CACHE_NAME = 'death-walk-v0.6.2';
+const CACHE_NAME = 'death-walk-v0.7.0';
 
 // Install: activate immediately, no pre-caching.
 self.addEventListener('install', (event) => {

@@ -2,7 +2,7 @@
   "name": "Death Walk",
   "short_name": "Death Walk",
   "description": "Tiki Beach to Daytona. A portrait arcade walking game.",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
