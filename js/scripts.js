@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.5.0';
+  var VERSION = '0.5.1';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -172,7 +172,7 @@
     playerU = 0.5;
     targetU = 0.5;
     hazards.length = 0;
-    spawnTimer = 1.5; // grace period before the first hazard
+    spawnTimer = 0.3; // near-instant first hazard — the promenade is busy
     invulnUntil = 0;
     shakeUntil = 0;
     flashUntil = 0;
@@ -308,7 +308,9 @@
   //   drift    constant sideways speed in promenade-widths/sec (random
   //            direction per hazard; 0 = locked straight)
   //   wander   sinusoidal wander instead of drift: [amplitude, Hz]
-  //   group    [min, max] members walking together (hen parties)
+  //   lurch    erratic wander: [max speed, min secs, max secs] — picks a
+  //            new random sideways velocity on a random timer
+  //   group    [min, max] members walking together (hen parties, lads)
   //   ground   static patch stuck to the promenade surface
   //   effect   'stumble' (invuln + shake + flash + penalty) or 'skid'
   //   penalty  seconds added to the run clock on collision
@@ -317,22 +319,25 @@
   // ---------------------------------------------------------------------
   var HAZARD_TYPES = {
     pedestrian: { speed: 1.2, spawn: [50, 80],  width: 30, drift: 0.012,
-                  effect: 'stumble', penalty: 2, weight: 26, colour: '#7fb069' },
-    jogger:     { speed: 4.5, spawn: [60, 100], width: 26, drift: 0,
-                  effect: 'stumble', penalty: 2, weight: 18, colour: '#f77f00' },
-    scooter:    { speed: 6.0, spawn: [25, 45],  width: 42, drift: 0.08,
-                  effect: 'stumble', penalty: 2, weight: 14, colour: '#9d4edd' },
+                  effect: 'stumble', penalty: 2, weight: 24, colour: '#7fb069' },
+    jogger:     { speed: 4.5, spawn: [60, 100], width: 22, drift: 0,
+                  effect: 'stumble', penalty: 2, weight: 16, colour: '#f77f00' },
+    scooter:    { speed: 9.5, spawn: [25, 45],  width: 46, drift: 0.10,
+                  effect: 'stumble', penalty: 2, weight: 13, colour: '#9d4edd' },
     henParty:   { speed: 1.6, spawn: [50, 80],  width: 20, wander: [0.22, 0.25],
                   group: [2, 3],
-                  effect: 'stumble', penalty: 2, weight: 12, colour: '#ff70a6' },
+                  effect: 'stumble', penalty: 2, weight: 11, colour: '#ff70a6' },
+    drunkLads:  { speed: 1.4, spawn: [45, 75],  width: 27, lurch: [0.16, 0.5, 1.3],
+                  group: [2, 3],
+                  effect: 'stumble', penalty: 2, weight: 13, colour: '#4d96ff' },
     performer:  { speed: 0.15, spawn: [50, 110], width: 24, drift: 0,
-                  effect: 'stumble', penalty: 2, weight: 12, colour: '#25ced1' },
+                  effect: 'stumble', penalty: 2, weight: 10, colour: '#25ced1' },
     puke:       { speed: 0,   spawn: [40, 70],  width: 44, drift: 0, ground: true,
-                  effect: 'skid', penalty: 0, weight: 18, colour: '#8aa62f' },
+                  effect: 'skid', penalty: 0, weight: 13, colour: '#8aa62f' },
   };
 
-  var SPAWN_INTERVAL_START = 2.5; // seconds between spawns at 0m
-  var SPAWN_INTERVAL_END = 1.4;   // and by the 400m mark
+  var SPAWN_INTERVAL_START = 1.3; // seconds between spawns at 0m
+  var SPAWN_INTERVAL_END = 0.8;   // and by the 400m mark
   var STUMBLE_INVULN_MS = 1200;
   var STUMBLE_SHAKE_MS = 450;
   var STUMBLE_FLASH_MS = 700;
@@ -383,6 +388,10 @@
       h.phase = Math.random() * Math.PI * 2;
       var margin = h.wanderAmp + 0.06;
       h.u0 = margin + Math.random() * (1 - margin * 2);
+    } else if (cfg.lurch) {
+      h.u0 = 0.15 + Math.random() * 0.7;
+      h.driftVel = cfg.lurch[0] * (Math.random() * 2 - 1);
+      h.lurchTimer = cfg.lurch[1] + Math.random() * (cfg.lurch[2] - cfg.lurch[1]);
     } else {
       h.u0 = 0.06 + Math.random() * 0.88;
       if (cfg.drift) h.driftVel = cfg.drift * (Math.random() < 0.5 ? -1 : 1);
@@ -444,6 +453,14 @@
 
       if (h.wanderAmp) {
         h.u = h.u0 + h.wanderAmp * Math.sin(h.phase + h.wanderOmega * h.age);
+      } else if (cfg.lurch) {
+        // Erratic: lurch onto a new random heading every so often
+        h.lurchTimer -= dt;
+        if (h.lurchTimer <= 0) {
+          h.driftVel = cfg.lurch[0] * (Math.random() * 2 - 1);
+          h.lurchTimer = cfg.lurch[1] + Math.random() * (cfg.lurch[2] - cfg.lurch[1]);
+        }
+        h.u += h.driftVel * dt;
       } else if (h.driftVel) {
         h.u += h.driftVel * dt;
       }
@@ -793,7 +810,7 @@
       return;
     }
 
-    // Hen parties: draw every member of the group
+    // Group hazards: draw every member
     if (h.members) {
       for (var i = 0; i < h.members.length; i++) {
         var mem = h.members[i];
@@ -802,8 +819,31 @@
         var dd = depthOf(dm);
         var ss = spreadOf(dd);
         var xx = depthToX(promenadeLeft() + promenadeWidth() * (h.u + mem.du), dd);
+        var yy = depthToY(dd);
         var ww = cfg.width * ss;
-        drawFigure(xx, depthToY(dd), ww, ww * 1.45, cfg.colour);
+
+        if (h.key === 'henParty') {
+          // Petite, bouncing on their heels, white party sashes
+          var bob = Math.abs(Math.sin(h.age * 6 + i * 1.9)) * 3 * ss;
+          drawFigure(xx, yy - bob, ww, ww * 1.35, cfg.colour);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.lineWidth = Math.max(1, ww * 0.14);
+          ctx.beginPath();
+          ctx.moveTo(xx - ww * 0.4, yy - bob - ww * 1.25);
+          ctx.lineTo(xx + ww * 0.4, yy - bob - ww * 0.35);
+          ctx.stroke();
+        } else {
+          // Drunk lads: stocky, square-shouldered, visibly swaying,
+          // pint in hand
+          var sway = Math.sin(h.age * 3.2 + i * 2.4) * 0.09;
+          ctx.save();
+          ctx.translate(xx, yy);
+          ctx.rotate(sway);
+          drawFigure(0, 0, ww * 1.1, ww * 1.15, cfg.colour);
+          ctx.fillStyle = '#ffd166';
+          ctx.fillRect(ww * 0.55, -ww * 0.95, ww * 0.22, ww * 0.3);
+          ctx.restore();
+        }
       }
       return;
     }
@@ -815,39 +855,87 @@
     var w2 = cfg.width * s2;
 
     if (h.key === 'scooter') {
-      // Low, wide platform with a seated rider
+      // Unmistakably a vehicle: chassis, wheels, steering column,
+      // helmeted rider — wide and low
       ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
       ctx.beginPath();
-      ctx.ellipse(x2, y2, w2 * 0.62, w2 * 0.2, 0, 0, Math.PI * 2);
+      ctx.ellipse(x2, y2, w2 * 0.65, w2 * 0.18, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = cfg.colour;
-      roundRect(x2 - w2 / 2, y2 - w2 * 0.32, w2, w2 * 0.32, w2 * 0.12);
+
+      ctx.fillStyle = '#2b2d42'; // wheels
+      ctx.beginPath();
+      ctx.arc(x2 - w2 * 0.38, y2 - w2 * 0.08, w2 * 0.14, 0, Math.PI * 2);
+      ctx.arc(x2 + w2 * 0.38, y2 - w2 * 0.08, w2 * 0.14, 0, Math.PI * 2);
       ctx.fill();
-      drawFigure(x2, y2 - w2 * 0.28, w2 * 0.5, w2 * 0.55, cfg.colour);
+
+      ctx.fillStyle = cfg.colour; // chassis
+      roundRect(x2 - w2 * 0.5, y2 - w2 * 0.42, w2, w2 * 0.3, w2 * 0.1);
+      ctx.fill();
+
+      ctx.strokeStyle = cfg.colour; // steering column + handlebar
+      ctx.lineWidth = Math.max(2, w2 * 0.08);
+      ctx.beginPath();
+      ctx.moveTo(x2 - w2 * 0.34, y2 - w2 * 0.42);
+      ctx.lineTo(x2 - w2 * 0.34, y2 - w2 * 0.95);
+      ctx.moveTo(x2 - w2 * 0.5, y2 - w2 * 0.95);
+      ctx.lineTo(x2 - w2 * 0.18, y2 - w2 * 0.95);
+      ctx.stroke();
+
+      ctx.fillStyle = cfg.colour; // seated rider
+      roundRect(x2 - w2 * 0.02, y2 - w2 * 0.85, w2 * 0.32, w2 * 0.45, w2 * 0.1);
+      ctx.fill();
+      ctx.fillStyle = '#f4d1ae';
+      ctx.beginPath();
+      ctx.arc(x2 + w2 * 0.14, y2 - w2 * 0.97, w2 * 0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#2b2d42'; // helmet
+      ctx.beginPath();
+      ctx.arc(x2 + w2 * 0.14, y2 - w2 * 1.0, w2 * 0.15, Math.PI, 0);
+      ctx.fill();
       return;
     }
 
     if (h.key === 'jogger') {
-      // Taller and slimmer, with a lean in their drift-free hustle
-      drawFigure(x2, y2, w2, w2 * 2.0, cfg.colour);
+      // Tall, thin, leaning hard into the run, white headband
+      ctx.save();
+      ctx.translate(x2, y2);
+      ctx.rotate(-0.16);
+      drawFigure(0, 0, w2, w2 * 2.3, cfg.colour);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-w2 * 0.4, -w2 * 2.3 - w2 * 0.62, w2 * 0.8, w2 * 0.16);
+      ctx.restore();
       return;
     }
 
     if (h.key === 'performer') {
-      // Small figure plus a pitch marker so they read as parked
+      // Wide-brimmed hat, arms out frozen mid-act, pitch cone beside
       drawFigure(x2, y2, w2, w2 * 1.4, cfg.colour);
-      ctx.fillStyle = '#ffd166';
+      ctx.strokeStyle = cfg.colour; // outstretched arms
+      ctx.lineWidth = Math.max(2, w2 * 0.14);
       ctx.beginPath();
-      ctx.moveTo(x2 + w2 * 0.9, y2);
-      ctx.lineTo(x2 + w2 * 1.15, y2);
-      ctx.lineTo(x2 + w2 * 1.02, y2 - w2 * 0.55);
+      ctx.moveTo(x2 - w2 * 0.95, y2 - w2 * 1.35);
+      ctx.lineTo(x2 + w2 * 0.95, y2 - w2 * 1.35);
+      ctx.stroke();
+      ctx.fillStyle = '#2b2d42'; // hat brim
+      ctx.beginPath();
+      ctx.ellipse(x2, y2 - w2 * 1.4 - w2 * 0.55, w2 * 0.55, w2 * 0.14, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffd166'; // pitch cone
+      ctx.beginPath();
+      ctx.moveTo(x2 + w2 * 1.1, y2);
+      ctx.lineTo(x2 + w2 * 1.5, y2);
+      ctx.lineTo(x2 + w2 * 1.3, y2 - w2 * 0.6);
       ctx.closePath();
       ctx.fill();
       return;
     }
 
-    // Pedestrians and anything without a bespoke shape
+    // Pedestrian: the plain, unhurried default — round body, flat cap
     drawFigure(x2, y2, w2, w2 * 1.5, cfg.colour);
+    ctx.fillStyle = '#5a4a3a';
+    ctx.beginPath();
+    ctx.arc(x2, y2 - w2 * 1.5 - w2 * 0.38, w2 * 0.42, Math.PI, 0);
+    ctx.fill();
   }
 
   // Hazards still ahead of the player (drawn before them) vs already
