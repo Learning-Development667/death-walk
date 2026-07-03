@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.7.2';
+  var VERSION = '0.8.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -146,8 +146,11 @@
   var elapsed = 0;           // run clock in seconds (collisions add penalties)
   var playerU = 0.5;         // player position across the promenade, 0..1
   var targetU = 0.5;         // where the player is easing toward, 0..1
+  var playerV = 0.5;         // vertical position in the movement band, 0..1
+  var targetV = 0.5;         // where vertical input wants the player
   var lastTime = 0;
   var frameNow = 0;          // current rAF timestamp, ms
+  var paused = false;        // photo overlay showing — world frozen
 
   // Collision effect timers (rAF-clock ms) and skid state
   var invulnUntil = 0;       // no repeat hits while this is in the future
@@ -155,6 +158,62 @@
   var flashUntil = 0;        // player flash window after a stumble
   var skidUntil = 0;         // control lost while sliding on puke
   var skidVel = 0;           // sideways slip, promenade-widths per second
+
+  // ---------------------------------------------------------------------
+  // TEMP character flags — stand-ins for Phase 4's real character
+  // selection system. Flip by hand for testing until that lands.
+  // ---------------------------------------------------------------------
+  var SQUAD_HAS_ADAM = false;  // TEMP: Adam in the squad (Phase 4)
+  var PLAYING_AS_LEE = false;  // TEMP: playing as Lee (Phase 4)
+
+  // ---------------------------------------------------------------------
+  // Score, streaks, and carried items
+  // ---------------------------------------------------------------------
+  var NEAR_MISS_PX = 26;       // extra margin beyond a hit that counts as close
+  var NEAR_MISS_POINTS = 25;
+  var DODGE_POINTS = 10;       // per hazard survived, scaled by the streak
+  var LOOKY_POINTS = 100;
+  var CHAT_MULT = 2;           // hen party chat: points multiplier...
+  var CHAT_MULT_MS = 15000;    // ...for this long
+  var CHAT_HOLD_S = 0.8;       // how long to hold alongside to trigger a chat
+  var CHAT_RANGE_M = 2.5;      // depth window that counts as "alongside"
+  var CHAT_GAP_PX = 42;        // beyond a collision, but this close, sideways
+  var SWAGGER_CHAT = 1;        // drunk meter relief from a hen party chat
+  var SWAGGER_SUPER = 2.5;     // ...with a rose delivered (secret)
+  var SWAGGER_LOOKY = 0.5;     // ...from the looky looky man
+  var ADAM_INVULN_MS = 5000;   // shark-has-fed invincibility window
+
+  var score = 0;
+  var streak = 0;              // consecutive hazards survived since a stumble
+  var multUntil = 0;           // hen-chat points multiplier active until (ms)
+  var roses = 0;               // carried roses from the rose seller
+  var hasShades = false;       // cosmetic sunglasses from the looky looky man
+
+  // Achievements — simple local store for now (no Firestore yet).
+  // Persists across runs within the session, never reset by resetRun.
+  var achievements = {};
+
+  var noticeText = '';
+  var noticeUntil = 0;
+
+  function notify(text) {
+    noticeText = text;
+    noticeUntil = frameNow + 2600;
+  }
+
+  function unlockAchievement(id, label) {
+    if (achievements[id]) return;
+    achievements[id] = true;
+    notify('ACHIEVEMENT: ' + label);
+  }
+
+  function scoreMult() {
+    return frameNow < multUntil ? CHAT_MULT : 1;
+  }
+
+  function addScore(points) {
+    score += Math.round(points * scoreMult());
+  }
 
   var startScreen = document.getElementById('start-screen');
   var endScreen = document.getElementById('end-screen');
@@ -173,17 +232,62 @@
     return Math.min(promenadeWidth() * 0.14, 46);
   }
 
+  // ---------------------------------------------------------------------
+  // Vertical movement — the avatar moves in a screen band as well as
+  // sideways. Standing at (or above) the neutral line walks forward at
+  // full speed; pulling down toward the bottom of the band slows and
+  // then reverses the walk, letting the player deliberately drop back
+  // (hazards keep approaching at their own pace regardless).
+  // ---------------------------------------------------------------------
+  var BAND_TOP_FRAC = 0.70;    // furthest forward the avatar can stand
+  var BAND_BOTTOM_FRAC = 0.94; // furthest back
+  var BACK_SPEED = 4;          // m/s walked backward at a full pull
+
+  function neutralV() {
+    return (0.89 - BAND_TOP_FRAC) / (BAND_BOTTOM_FRAC - BAND_TOP_FRAC);
+  }
+
+  function avatarY() {
+    return H * (BAND_TOP_FRAC + (BAND_BOTTOM_FRAC - BAND_TOP_FRAC) * playerV);
+  }
+
+  // Forward rate in m/s given the avatar's band position
+  function walkRate() {
+    var n = neutralV();
+    if (playerV <= n) return WALK_SPEED;
+    var f = (playerV - n) / (1 - n);
+    return WALK_SPEED - (WALK_SPEED + BACK_SPEED) * f;
+  }
+
+  // The avatar's depth offset in metres from the reference plane (m = 0),
+  // so collisions happen where the avatar actually stands.
+  function playerM() {
+    var dA = (avatarY() - horizonY()) / (playerY() - horizonY());
+    return PERSPECTIVE * (Math.pow(dA, -1 / DEPTH_CURVE) - 1);
+  }
+
   function resetRun() {
     distance = 0;
     elapsed = 0;
     playerU = 0.5;
     targetU = 0.5;
+    playerV = neutralV();
+    targetV = neutralV();
     hazards.length = 0;
     spawnTimer = 0.02; // and keep spawning from the very first frame
     pickups.length = 0;
     pickupTimer = 3;
-    drunk = 0;
+    drunk = DRUNK_START;
     inputLog.length = 0;
+    score = 0;
+    streak = 0;
+    multUntil = 0;
+    roses = 0;
+    hasShades = false;
+    selfieUsed = {};
+    paused = false;
+    noticeUntil = 0;
+    hidePhotoOverlay();
 
     // Pre-populate the corridor so the run starts as busy as it plays:
     // hazards spawn 25-110m out and take time to arrive, so an empty
@@ -228,7 +332,14 @@
     targetU = clamp01((x - promenadeLeft()) / promenadeWidth());
   }
 
+  function setTargetFromScreenY(y) {
+    targetV = clamp01((y - H * BAND_TOP_FRAC) /
+      (H * (BAND_BOTTOM_FRAC - BAND_TOP_FRAC)));
+  }
+
   function updatePlayer(dt) {
+    if (paused) return;
+
     // Skidding on puke: the player slips sideways with no control until
     // the skid window ends, then resumes from wherever they ended up.
     if (frameNow < skidUntil) {
@@ -243,6 +354,15 @@
     if (dir !== 0 && canMove()) {
       targetU = clamp01(targetU + dir * KEY_SPEED * dt);
     }
+    var vdir = (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
+    if (vdir !== 0 && canMove()) {
+      targetV = clamp01(targetV + vdir * KEY_SPEED * dt);
+    }
+
+    // Vertical follows its target with the same easing; drunk lag and
+    // sway stay horizontal-only.
+    var vEase = 1 - Math.exp(-FOLLOW_RATE * dt);
+    playerV = clamp01(playerV + (targetV - playerV) * vEase);
 
     // Record raw input; the avatar responds to a delayed copy of it,
     // the delay growing with the drunk meter (input lag).
@@ -300,18 +420,22 @@
   var dragging = false;
   var leftHeld = false;
   var rightHeld = false;
+  var upHeld = false;
+  var downHeld = false;
 
   document.addEventListener('touchstart', function (e) {
     var t = e.touches[0];
-    if (!t || !canMove()) return;
+    if (!t || !canMove() || paused) return;
     dragging = true;
     setTargetFromScreenX(t.clientX);
+    setTargetFromScreenY(t.clientY);
   }, { passive: true });
 
   document.addEventListener('touchmove', function (e) {
     var t = e.touches[0];
-    if (!t || !dragging || !canMove()) return;
+    if (!t || !dragging || !canMove() || paused) return;
     setTargetFromScreenX(t.clientX);
+    setTargetFromScreenY(t.clientY);
     if (state === STATE_READY) startWalking(); // first movement starts the run
   }, { passive: true });
 
@@ -330,6 +454,12 @@
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
       rightHeld = true;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      upHeld = true;
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      downHeld = true;
     } else {
       return;
     }
@@ -339,11 +469,15 @@
   document.addEventListener('keyup', function (e) {
     if (e.key === 'ArrowLeft') leftHeld = false;
     else if (e.key === 'ArrowRight') rightHeld = false;
+    else if (e.key === 'ArrowUp') upHeld = false;
+    else if (e.key === 'ArrowDown') downHeld = false;
   });
 
   window.addEventListener('blur', function () {
     leftHeld = false;
     rightHeld = false;
+    upHeld = false;
+    downHeld = false;
     dragging = false;
   });
 
@@ -470,6 +604,7 @@
   // never exceed it: the *_MAX values are the old 4-beer severity, now
   // the hardest the game ever gets, and DRUNK_CURVE shapes the climb
   // (>1 = the first beers are gentle steps, later ones bigger ones).
+  var DRUNK_START = 1;            // baseline tipsiness leaving Tiki Beach
   var DRUNK_EFFECT_CAP = 4;       // beers at which effects max out
   var DRUNK_CURVE = 1.5;          // exponent shaping the 0..cap ramp
   var LAG_MAX_MS = 220;           // input lag at the cap
@@ -569,15 +704,28 @@
       }
     }
 
+    // Street performers come in flavours: the plain act, the rose
+    // seller, and the looky looky man (sunglasses vendor)
+    if (key === 'performer') {
+      var roll = Math.random();
+      h.variant = roll < 0.55 ? 'plain' : (roll < 0.8 ? 'roseSeller' : 'lookyMan');
+    }
+
     hazards.push(h);
+  }
+
+  // Signed clearance in px between the player's body edge and a hazard
+  // edge at position u: <= 0 means overlapping (a hit).
+  function playerGapTo(u, widthPx) {
+    var hx = promenadeLeft() + promenadeWidth() * u;
+    return Math.abs(hx - playerScreenX()) -
+      (playerWidth() + widthPx) * 0.5 * 0.8; // slight forgiveness
   }
 
   // Overlap test at the player's depth between the player's body and a
   // point at position u with the given width (px at player depth).
   function overlapsPlayer(u, widthPx) {
-    var hx = promenadeLeft() + promenadeWidth() * u;
-    var gap = Math.abs(hx - playerScreenX());
-    return gap < (playerWidth() + widthPx) * 0.5 * 0.8; // slight forgiveness
+    return playerGapTo(u, widthPx) <= 0;
   }
 
   function triggerStumble(cfg) {
@@ -585,6 +733,7 @@
     shakeUntil = frameNow + STUMBLE_SHAKE_MS;
     flashUntil = frameNow + STUMBLE_FLASH_MS;
     elapsed += cfg.penalty; // time penalty straight onto the run clock
+    streak = 0;             // a real collision breaks the dodge streak
   }
 
   function triggerSkid(h) {
@@ -625,6 +774,7 @@
       }
 
       var m = h.worldZ - distance;
+      var mA = m - playerM(); // depth relative to where the avatar stands
 
       // Cleanup: fully past the player, or drifted off the promenade
       if (m < bottomMetres() - 2 || h.u < -0.05 || h.u > 1.05) {
@@ -632,26 +782,39 @@
         continue;
       }
 
-      // Collisions, checked at the player's depth
+      // Collisions, checked at the avatar's actual depth
       if (cfg.ground) {
         if (!h.hit && frameNow >= skidUntil &&
-            Math.abs(m) < 1.0 && overlapsPlayer(h.u, cfg.width)) {
+            Math.abs(mA) < 1.0 && overlapsPlayer(h.u, cfg.width)) {
           triggerSkid(h);
         }
-      } else if (frameNow >= invulnUntil) {
+      } else if (frameNow >= invulnUntil && !h.harmless) {
+        var collided = false;
         if (h.members) {
           for (var j = 0; j < h.members.length; j++) {
             var mem = h.members[j];
-            if (Math.abs(m + mem.dz) < 0.6 &&
+            if (Math.abs(mA + mem.dz) < 0.6 &&
                 overlapsPlayer(h.u + mem.du, cfg.width)) {
-              triggerStumble(cfg);
+              collided = true;
               break;
             }
           }
-        } else if (Math.abs(m) < 0.6 && overlapsPlayer(h.u, cfg.width)) {
-          triggerStumble(cfg);
+        } else if (Math.abs(mA) < 0.6 && overlapsPlayer(h.u, cfg.width)) {
+          collided = true;
+        }
+
+        if (collided) {
+          if (h.variant === 'roseSeller') collectRose(h);
+          else if (h.variant === 'lookyMan') collectShades(h);
+          else {
+            triggerStumble(cfg);
+            h.hitPlayer = true;
+          }
         }
       }
+
+      updateChat(h, mA, dt);
+      checkPassed(h, mA);
     }
 
     // Fixed scenery collides like any stationary hazard: a stumble
@@ -659,13 +822,113 @@
       var items = sceneryItems();
       for (var si = 0; si < items.length; si++) {
         var it = items[si];
-        var sm = it.worldZ - distance;
+        var sm = it.worldZ - distance - playerM();
         if (Math.abs(sm) < 0.7 &&
             overlapsPlayer(it.u, it.cfg.width * it.cfg.hit)) {
           triggerStumble(it.cfg);
           break;
         }
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Vendors — rose seller and looky looky man (performer variants).
+  // Colliding with them rewards instead of stumbling.
+  // ---------------------------------------------------------------------
+  function collectRose(h) {
+    h.harmless = true; // sold out — she won't trip you afterwards
+    if (PLAYING_AS_LEE) {
+      // TEMP Lee flavour until Phase 4 character select
+      showPhotoOverlay({
+        caption: 'Lee eats a rose... turns out they’re out of order. ' +
+                 'Buying the lot!',
+        colour: '#b23a48',
+      });
+    }
+    roses += 1;
+    notify('Got a rose');
+  }
+
+  function collectShades(h) {
+    h.harmless = true;
+    hasShades = true; // cosmetic for the rest of the run
+    drunk = Math.max(0, drunk - SWAGGER_LOOKY);
+    addScore(LOOKY_POINTS);
+    notify('Looky looky! +' + LOOKY_POINTS);
+  }
+
+  // ---------------------------------------------------------------------
+  // Hen party chat — pull back and hold alongside a group (close, not
+  // colliding, while easing off the walk) to charm rather than crash.
+  // Carrying a rose upgrades the outcome; drunk lads accept roses too.
+  // ---------------------------------------------------------------------
+  function updateChat(h, mA, dt) {
+    var wantsChat = h.key === 'henParty' ||
+      (h.key === 'drunkLads' && roses > 0);
+    if (!wantsChat || h.chatted || h.hitPlayer) return;
+
+    var gap = playerGapTo(h.u, h.cfg.width);
+    var alongside = Math.abs(mA) < CHAT_RANGE_M &&
+      gap > 0 && gap < CHAT_GAP_PX &&
+      walkRate() < WALK_SPEED * 0.5; // deliberately holding back
+
+    h.chatT = alongside ? (h.chatT || 0) + dt : 0;
+    if (h.chatT < CHAT_HOLD_S) return;
+
+    h.chatted = true;
+    if (h.key === 'drunkLads') {
+      // SECRET: sharing the love — every lad gets a rose (visual only)
+      roses -= 1;
+      h.ladsHaveRoses = true;
+      unlockAchievement('sharingTheLove', 'Sharing the Love');
+      return;
+    }
+    if (roses > 0) {
+      // SECRET: a rose delivered mid-chat — super swagger boost
+      roses -= 1;
+      drunk = Math.max(0, drunk - SWAGGER_SUPER);
+      notify('SUPER SWAGGER');
+      return;
+    }
+    if (SQUAD_HAS_ADAM) {
+      // TEMP Adam flavour until Phase 4 character select
+      invulnUntil = frameNow + ADAM_INVULN_MS;
+      notify('The shark has fed, all the little fish are happy');
+      return;
+    }
+    multUntil = frameNow + CHAT_MULT_MS;
+    drunk = Math.max(0, drunk - SWAGGER_CHAT);
+    notify('Hen party chat! x' + CHAT_MULT + ' points');
+  }
+
+  // ---------------------------------------------------------------------
+  // Near-miss and dodge streak — scored the moment a hazard passes the
+  // avatar's depth. Ground puke and disarmed vendors don't count.
+  // ---------------------------------------------------------------------
+  function checkPassed(h, mA) {
+    if (h.passed || h.cfg.ground || h.harmless) return;
+    if (mA >= 0) return;
+    h.passed = true;
+    if (h.hitPlayer) return; // they got you — no bonus, streak already reset
+
+    streak += 1;
+    var streakMult = 1 + Math.min(streak, 20) * 0.1;
+    addScore(DODGE_POINTS * streakMult);
+
+    // Closest clearance across the group decides a close shave
+    var gap;
+    if (h.members) {
+      gap = Infinity;
+      for (var j = 0; j < h.members.length; j++) {
+        gap = Math.min(gap, playerGapTo(h.u + h.members[j].du, h.cfg.width));
+      }
+    } else {
+      gap = playerGapTo(h.u, h.cfg.width);
+    }
+    if (gap > 0 && gap < NEAR_MISS_PX) {
+      addScore(NEAR_MISS_POINTS);
+      notify('Close shave! +' + NEAR_MISS_POINTS);
     }
   }
 
@@ -699,9 +962,59 @@
       var m = p.worldZ - distance;
       if (m < bottomMetres() - 2) {
         pickups.splice(i, 1); // missed it — gone below the screen
-      } else if (Math.abs(m) < 0.7 && overlapsPlayer(p.u, p.cfg.width)) {
+      } else if (Math.abs(m - playerM()) < 0.7 &&
+                 overlapsPlayer(p.u, p.cfg.width)) {
         drunk = Math.max(0, drunk + p.cfg.drunk);
         pickups.splice(i, 1); // collected
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Selfie spots + the photo overlay — a reusable pause-and-show system.
+  // Selfie spots are individually placed (not interval-repeated like
+  // palms/benches); future stop-offs (ice cream shop, the island...)
+  // trigger the same showPhotoOverlay() with their own image/caption.
+  // Real photos land later as files in images/ — set `image` to a path
+  // and it replaces the placeholder colour block.
+  // ---------------------------------------------------------------------
+  var SELFIE_SPOTS = [
+    { z: 90,  u: 0.30, caption: 'Selfie: Tiki Beach sunset',  colour: '#e76f51' },
+    { z: 210, u: 0.65, caption: 'Selfie: the neon strip',     colour: '#457b9d' },
+    { z: 330, u: 0.25, caption: 'Selfie: nearly Daytona',     colour: '#8e6bbf' },
+  ];
+  var selfieUsed = {};
+
+  var photoOverlay = document.getElementById('photo-overlay');
+  var photoFrame = document.getElementById('photo-frame');
+  var photoCaption = document.getElementById('photo-caption');
+
+  function showPhotoOverlay(opts) {
+    photoFrame.style.background = opts.image
+      ? 'center / cover no-repeat url("' + opts.image + '")'
+      : (opts.colour || '#333');
+    photoCaption.textContent = opts.caption || '';
+    photoOverlay.classList.remove('hidden');
+    paused = true;
+  }
+
+  function hidePhotoOverlay() {
+    if (photoOverlay) photoOverlay.classList.add('hidden');
+    paused = false;
+  }
+
+  if (photoOverlay) {
+    photoOverlay.addEventListener('click', hidePhotoOverlay);
+  }
+
+  function updateSelfieSpots() {
+    for (var i = 0; i < SELFIE_SPOTS.length; i++) {
+      if (selfieUsed[i]) continue;
+      var spot = SELFIE_SPOTS[i];
+      var mA = spot.z - distance - playerM();
+      if (Math.abs(mA) < 1.2 && overlapsPlayer(spot.u, 56)) {
+        selfieUsed[i] = true;
+        showPhotoOverlay(spot);
       }
     }
   }
@@ -936,8 +1249,11 @@
 
   function drawPlayer(time) {
     var x = playerScreenX();
-    var y = playerY();
-    var bodyW = playerWidth();
+    var y = avatarY();
+    // Scale with the avatar's depth so stepping forward/back reads true
+    var dA = (y - horizonY()) / (playerY() - horizonY());
+    var sc = spreadOf(dA);
+    var bodyW = playerWidth() * sc;
     var bodyH = bodyW * 1.5;
     var headR = bodyW * 0.42;
 
@@ -960,10 +1276,17 @@
     ctx.fill();
 
     // Head circle
+    var headY = y - bodyH / 2 - headR * 0.7 + bob;
     ctx.fillStyle = '#f4d1ae';
     ctx.beginPath();
-    ctx.arc(x, y - bodyH / 2 - headR * 0.7 + bob, headR, 0, Math.PI * 2);
+    ctx.arc(x, headY, headR, 0, Math.PI * 2);
     ctx.fill();
+
+    // Cosmetic shades from the looky looky man
+    if (hasShades) {
+      ctx.fillStyle = '#1d1d2b';
+      ctx.fillRect(x - headR * 0.85, headY - headR * 0.3, headR * 1.7, headR * 0.42);
+    }
   }
 
   function roundRect(x, y, w, h, r) {
@@ -1052,6 +1375,19 @@
           drawFigure(0, 0, ww * 1.1, ww * 1.15, cfg.colour);
           ctx.fillStyle = '#ffd166';
           ctx.fillRect(ww * 0.55, -ww * 0.95, ww * 0.22, ww * 0.3);
+          if (h.ladsHaveRoses) {
+            // Sharing the love: each lad shows off his rose
+            ctx.strokeStyle = '#2c7a49';
+            ctx.lineWidth = Math.max(1, ww * 0.08);
+            ctx.beginPath();
+            ctx.moveTo(-ww * 0.62, -ww * 0.6);
+            ctx.lineTo(-ww * 0.62, -ww * 1.1);
+            ctx.stroke();
+            ctx.fillStyle = '#ff4d6d';
+            ctx.beginPath();
+            ctx.arc(-ww * 0.62, -ww * 1.18, ww * 0.14, 0, Math.PI * 2);
+            ctx.fill();
+          }
           ctx.restore();
         }
       }
@@ -1114,6 +1450,70 @@
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(-w2 * 0.4, -w2 * 2.3 - w2 * 0.62, w2 * 0.8, w2 * 0.16);
       ctx.restore();
+      return;
+    }
+
+    if (h.key === 'performer' && h.variant === 'roseSeller') {
+      // Rose seller: red-dressed figure with a basket of roses
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(x2, y2, w2 * 0.7, w2 * 0.26, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#c1121f'; // flared dress
+      ctx.beginPath();
+      ctx.moveTo(x2, y2 - w2 * 1.5);
+      ctx.lineTo(x2 + w2 * 0.6, y2);
+      ctx.lineTo(x2 - w2 * 0.6, y2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#f4d1ae'; // head
+      ctx.beginPath();
+      ctx.arc(x2, y2 - w2 * 1.5 - w2 * 0.35, w2 * 0.38, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#8b5a2b'; // basket at her side
+      ctx.beginPath();
+      ctx.ellipse(x2 + w2 * 0.85, y2 - w2 * 0.5, w2 * 0.42, w2 * 0.28, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ff4d6d'; // the roses on top
+      for (var r2 = -1; r2 <= 1; r2++) {
+        ctx.beginPath();
+        ctx.arc(x2 + w2 * 0.85 + r2 * w2 * 0.2, y2 - w2 * 0.72, w2 * 0.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
+
+    if (h.key === 'performer' && h.variant === 'lookyMan') {
+      // Looky looky man: vendor with a tray of sunglasses and a
+      // permanent sales pitch overhead
+      drawFigure(x2, y2, w2, w2 * 1.6, '#e09f3e');
+      ctx.fillStyle = '#4a3728'; // tray held out front
+      ctx.fillRect(x2 - w2 * 0.75, y2 - w2 * 0.95, w2 * 1.5, w2 * 0.22);
+      ctx.fillStyle = '#1d1d2b'; // pairs of shades on the tray
+      for (var g2 = -1; g2 <= 1; g2++) {
+        ctx.beginPath();
+        ctx.arc(x2 + g2 * w2 * 0.42 - w2 * 0.09, y2 - w2 * 1.02, w2 * 0.08, 0, Math.PI * 2);
+        ctx.arc(x2 + g2 * w2 * 0.42 + w2 * 0.09, y2 - w2 * 1.02, w2 * 0.08, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Speech bubble, always visible while he's on screen
+      var bw2 = Math.max(52, w2 * 2.4);
+      var bh2 = Math.max(16, w2 * 0.62);
+      var by2 = y2 - w2 * 2.6 - bh2;
+      ctx.fillStyle = '#ffffff';
+      roundRect(x2 - bw2 / 2, by2, bw2, bh2, bh2 * 0.4);
+      ctx.fill();
+      ctx.beginPath(); // bubble tail
+      ctx.moveTo(x2 - bh2 * 0.3, by2 + bh2);
+      ctx.lineTo(x2 + bh2 * 0.3, by2 + bh2);
+      ctx.lineTo(x2, by2 + bh2 + bh2 * 0.45);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#0a1628';
+      ctx.font = Math.max(9, Math.round(w2 * 0.42)) + 'px "DM Sans", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Looky looky', x2, by2 + bh2 / 2);
       return;
     }
 
@@ -1301,14 +1701,48 @@
     ctx.fill();
   }
 
-  // Hazards, scenery, and pickups drawn together, far-to-near so
-  // overlaps stack correctly; split around the player's depth so passed
-  // objects draw over them.
+  // A selfie spot: phone on a selfie stick, planted in the deck
+  function drawSelfie(it, m) {
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var x = depthToX(promenadeLeft() + promenadeWidth() * it.u, d);
+    var y = depthToY(d);
+    var w = 22 * s;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.5, w * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#9aa0a6'; // the stick
+    ctx.lineWidth = Math.max(1.5, w * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - w * 1.9);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ff4d9d'; // the phone
+    roundRect(x - w * 0.42, y - w * 2.6, w * 0.84, w * 1.3, w * 0.14);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff'; // lens
+    ctx.beginPath();
+    ctx.arc(x, y - w * 1.95, w * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Hazards, scenery, pickups, and selfie spots drawn together,
+  // far-to-near so overlaps stack correctly; split around the player's
+  // depth so passed objects draw over them.
   function drawWorldObjects(behindPlayer) {
     var items = sceneryItems();
     var i;
     for (i = 0; i < hazards.length; i++) items.push(hazards[i]);
     for (i = 0; i < pickups.length; i++) items.push(pickups[i]);
+    for (i = 0; i < SELFIE_SPOTS.length; i++) {
+      if (!selfieUsed[i]) {
+        items.push({ selfie: true, worldZ: SELFIE_SPOTS[i].z, u: SELFIE_SPOTS[i].u });
+      }
+    }
     items.sort(function (a, b) { return b.worldZ - a.worldZ; });
 
     for (var j = 0; j < items.length; j++) {
@@ -1317,19 +1751,21 @@
       if (behindPlayer ? m >= 0 : m < 0) continue;
       if (items[j].scenery) drawScenery(items[j], m);
       else if (items[j].pickup) drawPickup(items[j], m);
+      else if (items[j].selfie) drawSelfie(items[j], m);
       else drawHazard(items[j], m);
     }
   }
 
   function drawHUD() {
     var stripH = 44;
+    var rowH = 16;     // second row: score and dodge streak
     var top = safeTop; // clear of the phone's own status bar / notch
     var mid = top + stripH / 2;
 
     // Translucent dark strip, extended up behind the status bar area so
     // the inset doesn't read as a floating gap
     ctx.fillStyle = 'rgba(10, 22, 40, 0.72)';
-    ctx.fillRect(0, 0, W, top + stripH);
+    ctx.fillRect(0, 0, W, top + stripH + rowH);
 
     ctx.textBaseline = 'middle';
     ctx.font = '16px "DM Mono", monospace';
@@ -1363,6 +1799,60 @@
       ctx.fillRect(mx + 1, my + 1,
         (mw - 2) * Math.min(drunk / DRUNK_METER_MAX, 1), mh - 2);
     }
+
+    // Carried-item icons beside the meter: roses left, shades right
+    if (roses > 0) {
+      var rx2 = mx - 16;
+      ctx.strokeStyle = '#2c7a49';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(rx2, my + mh);
+      ctx.lineTo(rx2, my - 2);
+      ctx.stroke();
+      ctx.fillStyle = '#ff4d6d';
+      ctx.beginPath();
+      ctx.arc(rx2, my - 4, 4, 0, Math.PI * 2);
+      ctx.fill();
+      if (roses > 1) {
+        ctx.font = '9px "DM Mono", monospace';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('x' + roses, rx2 + 6, my + 3);
+      }
+    }
+    if (hasShades) {
+      var sx2 = mx + mw + 16;
+      ctx.fillStyle = '#1d1d2b';
+      ctx.beginPath();
+      ctx.arc(sx2 - 4, my + 2, 3.5, 0, Math.PI * 2);
+      ctx.arc(sx2 + 4, my + 2, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#1d1d2b';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(sx2 - 1, my + 1);
+      ctx.lineTo(sx2 + 1, my + 1);
+      ctx.stroke();
+    }
+
+    // Second row: points (with the chat multiplier) and dodge streak
+    var rowMid = top + stripH + rowH / 2 - 2;
+    ctx.font = '11px "DM Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.fillText('PTS ' + score + (scoreMult() > 1 ? '  x' + CHAT_MULT : ''),
+      14, rowMid);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = streak > 0 ? '#7fd069' : 'rgba(255, 255, 255, 0.45)';
+    ctx.fillText('STREAK ' + streak, W - 14, rowMid);
+
+    // Transient notice line under the HUD
+    if (frameNow < noticeUntil) {
+      ctx.font = '13px "DM Sans", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffd166';
+      ctx.fillText(noticeText, W / 2, top + stripH + rowH + 14);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -1373,11 +1863,13 @@
     lastTime = time;
     frameNow = time;
 
-    if (state === STATE_WALKING) {
-      distance += WALK_SPEED * dt;
+    if (state === STATE_WALKING && !paused) {
+      // walkRate() goes negative when the avatar pulls back down the band
+      distance = Math.max(0, distance + walkRate() * dt);
       elapsed += dt;
       updateHazards(dt);
       updatePickups(dt);
+      updateSelfieSpots();
       if (distance >= RUN_DISTANCE) {
         distance = RUN_DISTANCE;
         finishRun();
