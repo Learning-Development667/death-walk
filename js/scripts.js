@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.5.1';
+  var VERSION = '0.6.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -172,7 +172,7 @@
     playerU = 0.5;
     targetU = 0.5;
     hazards.length = 0;
-    spawnTimer = 0.3; // near-instant first hazard — the promenade is busy
+    spawnTimer = 0.02; // hazards from the very first walking frame
     invulnUntil = 0;
     shakeUntil = 0;
     flashUntil = 0;
@@ -336,6 +336,54 @@
                   effect: 'skid', penalty: 0, weight: 13, colour: '#8aa62f' },
   };
 
+  // ---------------------------------------------------------------------
+  // Fixed scenery — obstacles placed at regular intervals along the
+  // route, identical every run (no spawning, no cleanup: positions are
+  // computed from distance on demand). A new scenery type is a config
+  // entry here, same as hazards.
+  //
+  //   interval  metres between placements
+  //   offset    metres before the first placement
+  //   lanes     u positions cycled by placement index (palms alternate
+  //             sides; benches hug the beach edge)
+  //   jitter    small deterministic variation on the lane position
+  //   width     draw width in px at the player's depth
+  //   hit       collision width as a fraction of width (palm trunks are
+  //             narrower than their canopy)
+  //   penalty   seconds added on collision (always a stumble)
+  // ---------------------------------------------------------------------
+  var SCENERY_TYPES = {
+    palm:  { interval: 18, offset: 10, lanes: [0.24, 0.76], jitter: 0.05,
+             width: 30, hit: 0.5, penalty: 2 },
+    bench: { interval: 48, offset: 30, lanes: [0.07], jitter: 0.02,
+             width: 38, hit: 0.9, penalty: 2 },
+  };
+
+  function sceneryU(cfg, k) {
+    return cfg.lanes[k % cfg.lanes.length] + (rand(k * 7.3) - 0.5) * cfg.jitter;
+  }
+
+  // All scenery items currently in view, as {key, cfg, worldZ, u}.
+  function sceneryItems() {
+    var items = [];
+    for (var key in SCENERY_TYPES) {
+      var cfg = SCENERY_TYPES[key];
+      var kMin = Math.max(0,
+        Math.ceil((distance + bottomMetres() - 2 - cfg.offset) / cfg.interval));
+      var kMax = Math.floor((distance + DRAW_DISTANCE - cfg.offset) / cfg.interval);
+      for (var k = kMin; k <= kMax; k++) {
+        items.push({
+          key: key,
+          cfg: cfg,
+          scenery: true,
+          worldZ: cfg.offset + k * cfg.interval,
+          u: sceneryU(cfg, k),
+        });
+      }
+    }
+    return items;
+  }
+
   var SPAWN_INTERVAL_START = 1.3; // seconds between spawns at 0m
   var SPAWN_INTERVAL_END = 0.8;   // and by the 400m mark
   var STUMBLE_INVULN_MS = 1200;
@@ -491,6 +539,20 @@
           }
         } else if (Math.abs(m) < 0.6 && overlapsPlayer(h.u, cfg.width)) {
           triggerStumble(cfg);
+        }
+      }
+    }
+
+    // Fixed scenery collides like any stationary hazard: a stumble
+    if (frameNow >= invulnUntil) {
+      var items = sceneryItems();
+      for (var si = 0; si < items.length; si++) {
+        var it = items[si];
+        var sm = it.worldZ - distance;
+        if (Math.abs(sm) < 0.7 &&
+            overlapsPlayer(it.u, it.cfg.width * it.cfg.hit)) {
+          triggerStumble(it.cfg);
+          break;
         }
       }
     }
@@ -938,17 +1000,84 @@
     ctx.fill();
   }
 
-  // Hazards still ahead of the player (drawn before them) vs already
-  // passed (drawn over them), each far-to-near so overlaps stack right.
-  function drawHazards(behindPlayer) {
-    var sorted = hazards.slice().sort(function (a, b) {
-      return b.worldZ - a.worldZ;
-    });
-    for (var i = 0; i < sorted.length; i++) {
-      var m = sorted[i].worldZ - distance;
+  function drawScenery(it, m) {
+    var cfg = it.cfg;
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var x = depthToX(promenadeLeft() + promenadeWidth() * it.u, d);
+    var y = depthToY(d);
+    var w = cfg.width * s;
+
+    if (it.key === 'palm') {
+      var trunkH = w * 2.4;
+      var top = y - trunkH;
+
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(x, y, w * 0.45, w * 0.16, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Trunk, tapering toward the top
+      ctx.fillStyle = '#8b5a2b';
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.14, y);
+      ctx.lineTo(x + w * 0.14, y);
+      ctx.lineTo(x + w * 0.07, top);
+      ctx.lineTo(x - w * 0.07, top);
+      ctx.closePath();
+      ctx.fill();
+
+      // Fronds fanning out from the crown
+      ctx.fillStyle = '#3aa060';
+      var angles = [-1.25, -0.65, 0, 0.65, 1.25];
+      for (var a = 0; a < angles.length; a++) {
+        var ang = angles[a];
+        ctx.beginPath();
+        ctx.ellipse(
+          x + Math.sin(ang) * w * 0.55,
+          top - Math.cos(ang) * w * 0.3,
+          w * 0.6, w * 0.19, ang, 0, Math.PI * 2
+        );
+        ctx.fill();
+      }
+      ctx.fillStyle = '#2c7a49'; // crown centre
+      ctx.beginPath();
+      ctx.arc(x, top, w * 0.16, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    // Bench: slatted seat and backrest on dark legs
+    var bh = w * 0.55;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.55, w * 0.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#4a3728'; // legs
+    ctx.fillRect(x - w * 0.42, y - bh * 0.45, w * 0.08, bh * 0.45);
+    ctx.fillRect(x + w * 0.34, y - bh * 0.45, w * 0.08, bh * 0.45);
+
+    ctx.fillStyle = '#a0623a'; // seat and backrest slats
+    ctx.fillRect(x - w * 0.5, y - bh * 0.55, w, bh * 0.16);
+    ctx.fillRect(x - w * 0.5, y - bh * 0.95, w, bh * 0.13);
+    ctx.fillRect(x - w * 0.5, y - bh * 1.2, w, bh * 0.13);
+  }
+
+  // Hazards and fixed scenery drawn together, far-to-near so overlaps
+  // stack correctly; split around the player's depth so passed objects
+  // draw over them.
+  function drawWorldObjects(behindPlayer) {
+    var items = sceneryItems();
+    for (var i = 0; i < hazards.length; i++) items.push(hazards[i]);
+    items.sort(function (a, b) { return b.worldZ - a.worldZ; });
+
+    for (var j = 0; j < items.length; j++) {
+      var m = items[j].worldZ - distance;
       if (m > DRAW_DISTANCE) continue;
       if (behindPlayer ? m >= 0 : m < 0) continue;
-      drawHazard(sorted[i], m);
+      if (items[j].scenery) drawScenery(items[j], m);
+      else drawHazard(items[j], m);
     }
   }
 
@@ -1010,11 +1139,9 @@
     drawPromenade();
     drawBuildings();
 
-    if (state !== STATE_TITLE) {
-      drawHazards(false); // still ahead of the player
-      drawPlayer(time);
-      drawHazards(true);  // already passed, closer to the camera
-    }
+    drawWorldObjects(false); // still ahead of the player
+    if (state !== STATE_TITLE) drawPlayer(time);
+    drawWorldObjects(true);  // already passed, closer to the camera
 
     if (shaking) ctx.restore();
 
