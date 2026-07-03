@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#0a1628">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Death Walk">
-  <title>Death Walk</title>
+  <meta name="apple-mobile-web-app-title" content="Death March">
+  <title>Death March</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -138,10 +138,23 @@
       color: #ffffff;
     }
 
+    .hand-row {
+      display: flex;
+      gap: 16px;
+      margin-top: 28px;
+    }
+
+    .hand-row .btn {
+      margin-top: 0;
+      padding: 14px 26px;
+    }
+
     .version {
       position: fixed;
-      bottom: calc(10px + env(safe-area-inset-bottom));
-      right: calc(12px + env(safe-area-inset-right));
+      bottom: calc(6px + env(safe-area-inset-bottom));
+      left: 0;
+      right: 0;
+      text-align: center;
       z-index: 20;
       pointer-events: none;
       font-family: 'DM Mono', monospace;
@@ -154,9 +167,13 @@
   <canvas id="game"></canvas>
 
   <div id="start-screen" class="overlay">
-    <div class="title">DEATH WALK</div>
+    <div class="title">DEATH MARCH</div>
     <div class="subtitle">Tiki Beach to Daytona</div>
-    <div class="prompt">TAP TO START</div>
+    <div class="prompt">CHOOSE YOUR THUMB</div>
+    <div class="hand-row">
+      <button class="btn" id="hand-left">LEFTY</button>
+      <button class="btn" id="hand-right">RIGHTY</button>
+    </div>
   </div>
 
   <div id="end-screen" class="overlay hidden">

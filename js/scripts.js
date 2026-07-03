@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.8.0';
+  var VERSION = '0.9.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -15,7 +15,8 @@
   var DEPTH_CURVE = 1.55;        // >1 keeps mid-distance gradual, rushes at end
   var MIN_SPREAD = 0.18;         // lateral width floor at the horizon
   var DRAW_DISTANCE = 170;       // metres of world drawn ahead of the player
-  var HORIZON_FRAC = 0.47;       // horizon line as a fraction of screen height
+  var HORIZON_FRAC = 0.40;       // horizon line as a fraction of screen height
+  var PLAYER_Y_FRAC = 0.80;      // the avatar's neutral screen height
   var FOLLOW_RATE = 12;          // drag smoothing, higher = snappier follow
   var KEY_SPEED = 1.2;           // held arrow key speed, promenade widths/sec
 
@@ -76,7 +77,9 @@
   function shoreX() { return wallX() - W * 0.34; } // shoreline at player depth
 
   function playerY() {
-    return H * 0.89; // close to the bottom edge, long view ahead
+    // Raised from the old 0.89 to free the bottom of the screen for the
+    // joystick zone; the horizon came up with it so the view is intact
+    return H * PLAYER_Y_FRAC;
   }
 
   // ---------------------------------------------------------------------
@@ -177,7 +180,7 @@
   var CHAT_MULT_MS = 15000;    // ...for this long
   var CHAT_HOLD_S = 0.8;       // how long to hold alongside to trigger a chat
   var CHAT_RANGE_M = 2.5;      // depth window that counts as "alongside"
-  var CHAT_GAP_PX = 42;        // beyond a collision, but this close, sideways
+  var CHAT_GAP_PX = 78;        // beyond a collision, but this close, sideways
   var SWAGGER_CHAT = 1;        // drunk meter relief from a hen party chat
   var SWAGGER_SUPER = 2.5;     // ...with a rose delivered (secret)
   var SWAGGER_LOOKY = 0.5;     // ...from the looky looky man
@@ -239,12 +242,12 @@
   // then reverses the walk, letting the player deliberately drop back
   // (hazards keep approaching at their own pace regardless).
   // ---------------------------------------------------------------------
-  var BAND_TOP_FRAC = 0.70;    // furthest forward the avatar can stand
-  var BAND_BOTTOM_FRAC = 0.94; // furthest back
+  var BAND_TOP_FRAC = 0.62;    // furthest forward the avatar can stand
+  var BAND_BOTTOM_FRAC = 0.84; // furthest back
   var BACK_SPEED = 4;          // m/s walked backward at a full pull
 
   function neutralV() {
-    return (0.89 - BAND_TOP_FRAC) / (BAND_BOTTOM_FRAC - BAND_TOP_FRAC);
+    return (PLAYER_Y_FRAC - BAND_TOP_FRAC) / (BAND_BOTTOM_FRAC - BAND_TOP_FRAC);
   }
 
   function avatarY() {
@@ -287,6 +290,10 @@
     selfieUsed = {};
     paused = false;
     noticeUntil = 0;
+    roseSellerSpawned = false;
+    joyId = null;
+    joyDX = 0;
+    joyDY = 0;
     hidePhotoOverlay();
 
     // Pre-populate the corridor so the run starts as busy as it plays:
@@ -328,15 +335,6 @@
     return state === STATE_READY || state === STATE_WALKING;
   }
 
-  function setTargetFromScreenX(x) {
-    targetU = clamp01((x - promenadeLeft()) / promenadeWidth());
-  }
-
-  function setTargetFromScreenY(y) {
-    targetV = clamp01((y - H * BAND_TOP_FRAC) /
-      (H * (BAND_BOTTOM_FRAC - BAND_TOP_FRAC)));
-  }
-
   function updatePlayer(dt) {
     if (paused) return;
 
@@ -357,6 +355,13 @@
     var vdir = (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
     if (vdir !== 0 && canMove()) {
       targetV = clamp01(targetV + vdir * KEY_SPEED * dt);
+    }
+
+    // The joystick steers analog-style: deflection direction and
+    // magnitude set the movement velocity on both axes together
+    if (canMove() && (joyDX !== 0 || joyDY !== 0)) {
+      targetU = clamp01(targetU + joyDX * JOY_RATE * dt);
+      targetV = clamp01(targetV + joyDY * JOY_RATE * dt);
     }
 
     // Vertical follows its target with the same easing; drunk lag and
@@ -413,39 +418,90 @@
   }
 
   // ---------------------------------------------------------------------
-  // Input — drag-to-follow touch anywhere on screen, held arrow keys on
-  // desktop. While a finger is down its horizontal position steers the
-  // player directly; lifting the finger leaves the player where they are.
+  // Input — a fixed virtual joystick in the bottom corner (left or right
+  // hand, chosen on the start screen), so the player's thumb never
+  // covers the play area. Analog: the nub's direction and distance from
+  // centre set movement direction and intensity on both axes. Held
+  // arrow keys remain for desktop testing.
   // ---------------------------------------------------------------------
-  var dragging = false;
+  var JOY_BASE_R = 52;   // visual base radius, also full-deflection range
+  var JOY_NUB_R = 22;    // draggable nub radius
+  var JOY_ZONE_R = 110;  // touches this close to the base grab the stick
+  var JOY_RATE = 1.6;    // widths (or band-heights) per second at full tilt
+
+  var joySide = 'right'; // set by the start screen handedness choice
+  var joyId = null;      // identifier of the finger on the stick
+  var joyDX = 0;         // deflection, -1..1
+  var joyDY = 0;
+
   var leftHeld = false;
   var rightHeld = false;
   var upHeld = false;
   var downHeld = false;
 
+  function joyCentre() {
+    return {
+      x: joySide === 'left' ? 74 : W - 74,
+      y: H - 74,
+    };
+  }
+
+  function setJoyVector(t) {
+    var c = joyCentre();
+    var dx = (t.clientX - c.x) / JOY_BASE_R;
+    var dy = (t.clientY - c.y) / JOY_BASE_R;
+    var mag = Math.sqrt(dx * dx + dy * dy);
+    if (mag > 1) {
+      dx /= mag;
+      dy /= mag;
+    }
+    joyDX = dx;
+    joyDY = dy;
+  }
+
   document.addEventListener('touchstart', function (e) {
-    var t = e.touches[0];
-    if (!t || !canMove() || paused) return;
-    dragging = true;
-    setTargetFromScreenX(t.clientX);
-    setTargetFromScreenY(t.clientY);
+    if (!canMove() || paused || joyId !== null) return;
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      var c = joyCentre();
+      var dx = t.clientX - c.x;
+      var dy = t.clientY - c.y;
+      if (dx * dx + dy * dy <= JOY_ZONE_R * JOY_ZONE_R) {
+        joyId = t.identifier;
+        setJoyVector(t);
+        break;
+      }
+    }
   }, { passive: true });
 
   document.addEventListener('touchmove', function (e) {
-    var t = e.touches[0];
-    if (!t || !dragging || !canMove() || paused) return;
-    setTargetFromScreenX(t.clientX);
-    setTargetFromScreenY(t.clientY);
-    if (state === STATE_READY) startWalking(); // first movement starts the run
+    if (joyId === null || paused) return;
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      if (t.identifier !== joyId) continue;
+      setJoyVector(t);
+      if (state === STATE_READY &&
+          (Math.abs(joyDX) > 0.15 || Math.abs(joyDY) > 0.15)) {
+        startWalking(); // first movement starts the run
+      }
+      break;
+    }
   }, { passive: true });
 
-  document.addEventListener('touchend', function (e) {
-    if (e.touches.length === 0) dragging = false;
-  }, { passive: true });
+  function releaseJoy(e) {
+    if (joyId === null) return;
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === joyId) {
+        joyId = null;
+        joyDX = 0;
+        joyDY = 0;
+        break;
+      }
+    }
+  }
 
-  document.addEventListener('touchcancel', function () {
-    dragging = false;
-  }, { passive: true });
+  document.addEventListener('touchend', releaseJoy, { passive: true });
+  document.addEventListener('touchcancel', releaseJoy, { passive: true });
 
   document.addEventListener('keydown', function (e) {
     if (e.key === 'ArrowLeft') {
@@ -481,11 +537,33 @@
     dragging = false;
   });
 
-  startScreen.addEventListener('click', function () {
+  // Handedness pick doubles as the start button; a plain tap anywhere
+  // else on the start screen keeps working (defaults right-handed).
+  function beginRun(side) {
     if (state !== STATE_TITLE) return;
+    if (side) joySide = side;
     startScreen.classList.add('hidden');
     resetRun();
+  }
+
+  startScreen.addEventListener('click', function () {
+    beginRun(null);
   });
+
+  var handLeftBtn = document.getElementById('hand-left');
+  var handRightBtn = document.getElementById('hand-right');
+  if (handLeftBtn) {
+    handLeftBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      beginRun('left');
+    });
+  }
+  if (handRightBtn) {
+    handRightBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      beginRun('right');
+    });
+  }
 
   walkAgainBtn.addEventListener('click', function (e) {
     e.stopPropagation();
@@ -656,9 +734,10 @@
   }
 
   // Spawn a hazard in its type's usual window ahead, or at an explicit
-  // distance (used to pre-populate the promenade at run start).
-  function spawnHazard(metresAhead) {
-    var key = weightedPick(HAZARD_TYPES);
+  // distance / forced type (used for run-start prefill and the
+  // guaranteed rose seller).
+  function spawnHazard(metresAhead, forceKey, forceVariant) {
+    var key = forceKey || weightedPick(HAZARD_TYPES);
     var cfg = HAZARD_TYPES[key];
     var h = {
       key: key,
@@ -708,10 +787,23 @@
     // seller, and the looky looky man (sunglasses vendor)
     if (key === 'performer') {
       var roll = Math.random();
-      h.variant = roll < 0.55 ? 'plain' : (roll < 0.8 ? 'roseSeller' : 'lookyMan');
+      h.variant = forceVariant ||
+        (roll < 0.55 ? 'plain' : (roll < 0.8 ? 'roseSeller' : 'lookyMan'));
     }
 
     hazards.push(h);
+  }
+
+  // The rose seller is guaranteed once, early-to-mid route, so there is
+  // always time left to deliver the rose — random spawns alone left her
+  // appearing too late (or never) in most runs.
+  var ROSE_SELLER_AT = 70; // metres walked when she is placed ahead
+  var roseSellerSpawned = false;
+
+  function ensureRoseSeller() {
+    if (roseSellerSpawned || distance < ROSE_SELLER_AT) return;
+    roseSellerSpawned = true;
+    spawnHazard(30 + Math.random() * 10, 'performer', 'roseSeller');
   }
 
   // Signed clearance in px between the player's body edge and a hazard
@@ -752,6 +844,7 @@
       spawnHazard();
       spawnTimer = spawnInterval();
     }
+    ensureRoseSeller();
 
     for (var i = hazards.length - 1; i >= 0; i--) {
       var h = hazards[i];
@@ -799,7 +892,12 @@
               break;
             }
           }
-        } else if (Math.abs(mA) < 0.6 && overlapsPlayer(h.u, cfg.width)) {
+        } else if (Math.abs(mA) < 0.6 &&
+                   overlapsPlayer(h.u, cfg.width *
+                     (h.variant === 'roseSeller' || h.variant === 'lookyMan'
+                       ? 1.6 : 1))) {
+          // Vendors get a friendlier catch radius — walking roughly into
+          // them should reliably collect, they're rewards not hazards
           collided = true;
         }
 
@@ -868,12 +966,19 @@
       (h.key === 'drunkLads' && roses > 0);
     if (!wantsChat || h.chatted || h.hitPlayer) return;
 
-    var gap = playerGapTo(h.u, h.cfg.width);
+    // Measure against the group's wander CENTRE, not their instantaneous
+    // sway — hens swing ±half the chat band every couple of seconds, so
+    // gating on live position made the hold impossible to sustain.
+    var anchorU = h.wanderAmp ? h.u0 : h.u;
+    var gap = playerGapTo(anchorU, h.cfg.width);
     var alongside = Math.abs(mA) < CHAT_RANGE_M &&
       gap > 0 && gap < CHAT_GAP_PX &&
       walkRate() < WALK_SPEED * 0.5; // deliberately holding back
 
-    h.chatT = alongside ? (h.chatT || 0) + dt : 0;
+    // Build while alongside, drain (not hard-reset) otherwise, so a
+    // brief wobble out of the band doesn't wipe the progress
+    h.chatT = alongside ? (h.chatT || 0) + dt
+                        : Math.max(0, (h.chatT || 0) - dt);
     if (h.chatT < CHAT_HOLD_S) return;
 
     h.chatted = true;
@@ -1855,6 +1960,46 @@
     }
   }
 
+  // The joystick: translucent base ring plus a nub that tracks the thumb
+  function drawJoystick() {
+    var c = joyCentre();
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, JOY_BASE_R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    var reach = JOY_BASE_R - JOY_NUB_R;
+    ctx.fillStyle = joyId !== null
+      ? 'rgba(255, 209, 102, 0.9)'
+      : 'rgba(255, 255, 255, 0.55)';
+    ctx.beginPath();
+    ctx.arc(c.x + joyDX * reach, c.y + joyDY * reach, JOY_NUB_R, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // PLACEHOLDER: squad avatar row. Phase 3's squad size / lives system
+  // will replace these empty circles with real member avatars and the
+  // greyed-out (knocked out) state — do not build that logic here yet.
+  function drawSquadRow() {
+    var n = 4;
+    var gap = 40;
+    var y = safeTop + 78;
+    var x0 = W / 2 - ((n - 1) * gap) / 2;
+    for (var i = 0; i < n; i++) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      ctx.beginPath();
+      ctx.arc(x0 + i * gap, y, 13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+
   // ---------------------------------------------------------------------
   // Main loop — requestAnimationFrame
   // ---------------------------------------------------------------------
@@ -1903,6 +2048,8 @@
 
     if (state !== STATE_TITLE) {
       drawHUD();
+      drawSquadRow();
+      if (state === STATE_READY || state === STATE_WALKING) drawJoystick();
     }
 
     requestAnimationFrame(frame);
