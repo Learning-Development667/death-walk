@@ -42,3 +42,4 @@ The version number lives in three places and must be kept in sync:
 - Bebas Neue — titles and big display text
 - DM Sans — body text and subtitles
 - DM Mono — HUD numbers (distance, timer)
+
