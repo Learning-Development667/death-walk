@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.9.0';
+  var VERSION = '0.10.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -17,6 +17,7 @@
   var DRAW_DISTANCE = 170;       // metres of world drawn ahead of the player
   var HORIZON_FRAC = 0.40;       // horizon line as a fraction of screen height
   var PLAYER_Y_FRAC = 0.80;      // the avatar's neutral screen height
+  var FOOTER_H = 128;            // bottom control zone: joystick + squad row
   var FOLLOW_RATE = 12;          // drag smoothing, higher = snappier follow
   var KEY_SPEED = 1.2;           // held arrow key speed, promenade widths/sec
 
@@ -124,9 +125,14 @@
     return vanishingX() + (xAtPlayer - vanishingX()) * spreadOf(d);
   }
 
-  // Depth of the bottom edge of the screen (a little behind the player).
+  // The gameplay view ends here; below is the control footer.
+  function gameBottom() {
+    return H - FOOTER_H;
+  }
+
+  // Depth of the bottom edge of the gameplay view (just behind the player).
   function bottomDepth() {
-    return (H - horizonY()) / (playerY() - horizonY());
+    return (gameBottom() - horizonY()) / (playerY() - horizonY());
   }
 
   // World metres ahead corresponding to the bottom edge (negative).
@@ -176,21 +182,22 @@
   var NEAR_MISS_POINTS = 25;
   var DODGE_POINTS = 10;       // per hazard survived, scaled by the streak
   var LOOKY_POINTS = 100;
-  var CHAT_MULT = 2;           // hen party chat: points multiplier...
+  var CHAT_MULT = 2;           // positive hen contact: points multiplier...
   var CHAT_MULT_MS = 15000;    // ...for this long
-  var CHAT_HOLD_S = 0.8;       // how long to hold alongside to trigger a chat
-  var CHAT_RANGE_M = 2.5;      // depth window that counts as "alongside"
-  var CHAT_GAP_PX = 78;        // beyond a collision, but this close, sideways
-  var SWAGGER_CHAT = 1;        // drunk meter relief from a hen party chat
-  var SWAGGER_SUPER = 2.5;     // ...with a rose delivered (secret)
-  var SWAGGER_LOOKY = 0.5;     // ...from the looky looky man
+  var BRIDE_POINTS = 250;      // flat bonus for delivering the bride's rose
+  var SWAGGER_CHAT = 1;        // drunk meter relief from a hen party bonus
+  var SWAGGER_SUPER = 2.5;     // ...with the rose delivered to the bride
+  var SWAGGER_LOOKY = 0.5;     // ...from a looky looky man
   var ADAM_INVULN_MS = 5000;   // shark-has-fed invincibility window
 
   var score = 0;
   var streak = 0;              // consecutive hazards survived since a stumble
-  var multUntil = 0;           // hen-chat points multiplier active until (ms)
+  var multUntil = 0;           // hen-bonus points multiplier active until (ms)
   var roses = 0;               // carried roses from the rose seller
-  var hasShades = false;       // cosmetic sunglasses from the looky looky man
+
+  // Wares bought from the looky looky men this run — each one appears on
+  // every avatar in the squad row when collected
+  var squadItems = { shades: false, hat: false, chain: false };
 
   // Achievements — simple local store for now (no Firestore yet).
   // Persists across runs within the session, never reset by resetRun.
@@ -286,7 +293,9 @@
     streak = 0;
     multUntil = 0;
     roses = 0;
-    hasShades = false;
+    squadItems.shades = false;
+    squadItems.hat = false;
+    squadItems.chain = false;
     selfieUsed = {};
     paused = false;
     noticeUntil = 0;
@@ -784,11 +793,21 @@
     }
 
     // Street performers come in flavours: the plain act, the rose
-    // seller, and the looky looky man (sunglasses vendor)
+    // seller, and the looky looky men (three different wares)
     if (key === 'performer') {
       var roll = Math.random();
       h.variant = forceVariant ||
-        (roll < 0.55 ? 'plain' : (roll < 0.8 ? 'roseSeller' : 'lookyMan'));
+        (roll < 0.4 ? 'plain' : (roll < 0.65 ? 'roseSeller' : 'lookyMan'));
+      if (h.variant === 'lookyMan') {
+        var wares = ['shades', 'hat', 'chain'];
+        h.wares = wares[Math.floor(Math.random() * wares.length)];
+      }
+    }
+
+    // Some hen parties have the bride out with them — a bonus contact
+    // rather than a hazard (see henBonus)
+    if (key === 'henParty') {
+      h.bride = Math.random() < 0.35;
     }
 
     hazards.push(h);
@@ -881,7 +900,7 @@
             Math.abs(mA) < 1.0 && overlapsPlayer(h.u, cfg.width)) {
           triggerSkid(h);
         }
-      } else if (frameNow >= invulnUntil && !h.harmless) {
+      } else if (!h.harmless) {
         var collided = false;
         if (h.members) {
           for (var j = 0; j < h.members.length; j++) {
@@ -902,16 +921,19 @@
         }
 
         if (collided) {
+          // Rewarding contacts deliberately ignore the post-stumble
+          // invulnerability window — only the stumble itself is gated
           if (h.variant === 'roseSeller') collectRose(h);
-          else if (h.variant === 'lookyMan') collectShades(h);
-          else {
+          else if (h.variant === 'lookyMan') collectWares(h);
+          else if (h.key === 'henParty' && (h.bride || roses > 0)) henBonus(h);
+          else if (h.key === 'drunkLads' && roses > 0) shareRoses(h);
+          else if (frameNow >= invulnUntil) {
             triggerStumble(cfg);
             h.hitPlayer = true;
           }
         }
       }
 
-      updateChat(h, mA, dt);
       checkPassed(h, mA);
     }
 
@@ -948,63 +970,69 @@
     notify('Got a rose');
   }
 
-  function collectShades(h) {
+  // The looky looky men: contact instantly buys their wares — swagger,
+  // points, and the item appears on every avatar in the squad row. No
+  // cutscene: the squad row updating live IS the reward.
+  function collectWares(h) {
     h.harmless = true;
-    hasShades = true; // cosmetic for the rest of the run
     drunk = Math.max(0, drunk - SWAGGER_LOOKY);
     addScore(LOOKY_POINTS);
+    squadItems[h.wares] = true;
+    if (h.wares === 'shades') unlockAchievement('shadyBusiness', 'Shady Business');
+    else if (h.wares === 'hat') unlockAchievement('hatsOff', 'Hats Off');
+    else unlockAchievement('chainReaction', 'Chain Reaction');
+    if (squadItems.shades && squadItems.hat && squadItems.chain) {
+      // SECRET: the full set in a single run
+      unlockAchievement('tatTrifecta', 'Tat Trifecta');
+    }
     notify('Looky looky! +' + LOOKY_POINTS);
   }
 
   // ---------------------------------------------------------------------
-  // Hen party chat — pull back and hold alongside a group (close, not
-  // colliding, while easing off the walk) to charm rather than crash.
-  // Carrying a rose upgrades the outcome; drunk lads accept roses too.
+  // Hen party contact — replaces the old hold-alongside chat. Standard
+  // hens stumble you like any hazard; the bride variant (or any hen
+  // party met while carrying a rose) is a bonus instead, and delivering
+  // the rose to the bride herself is the jackpot.
   // ---------------------------------------------------------------------
-  function updateChat(h, mA, dt) {
-    var wantsChat = h.key === 'henParty' ||
-      (h.key === 'drunkLads' && roses > 0);
-    if (!wantsChat || h.chatted || h.hitPlayer) return;
+  function henBonus(h) {
+    h.harmless = true; // one outcome per group, and no stumble after
+    var delivered = h.bride && roses > 0;
+    if (delivered) roses -= 1; // the bride keeps her bouquet
 
-    // Measure against the group's wander CENTRE, not their instantaneous
-    // sway — hens swing ±half the chat band every couple of seconds, so
-    // gating on live position made the hold impossible to sustain.
-    var anchorU = h.wanderAmp ? h.u0 : h.u;
-    var gap = playerGapTo(anchorU, h.cfg.width);
-    var alongside = Math.abs(mA) < CHAT_RANGE_M &&
-      gap > 0 && gap < CHAT_GAP_PX &&
-      walkRate() < WALK_SPEED * 0.5; // deliberately holding back
-
-    // Build while alongside, drain (not hard-reset) otherwise, so a
-    // brief wobble out of the band doesn't wipe the progress
-    h.chatT = alongside ? (h.chatT || 0) + dt
-                        : Math.max(0, (h.chatT || 0) - dt);
-    if (h.chatT < CHAT_HOLD_S) return;
-
-    h.chatted = true;
-    if (h.key === 'drunkLads') {
-      // SECRET: sharing the love — every lad gets a rose (visual only)
-      roses -= 1;
-      h.ladsHaveRoses = true;
-      unlockAchievement('sharingTheLove', 'Sharing the Love');
-      return;
-    }
-    if (roses > 0) {
-      // SECRET: a rose delivered mid-chat — super swagger boost
-      roses -= 1;
-      drunk = Math.max(0, drunk - SWAGGER_SUPER);
-      notify('SUPER SWAGGER');
-      return;
-    }
     if (SQUAD_HAS_ADAM) {
-      // TEMP Adam flavour until Phase 4 character select
+      // TEMP Adam flavour until Phase 4 character select: invincibility
+      // replaces the points bonus for any positive hen contact
       invulnUntil = frameNow + ADAM_INVULN_MS;
       notify('The shark has fed, all the little fish are happy');
+      if (delivered) unlockAchievement('bridesBouquet', "Bride's Bouquet");
       return;
     }
+
+    if (delivered) {
+      // SECRET: rose delivered to the bride — the jackpot outcome
+      addScore(BRIDE_POINTS);
+      drunk = Math.max(0, drunk - SWAGGER_SUPER);
+      multUntil = frameNow + CHAT_MULT_MS;
+      showPhotoOverlay({
+        caption: 'The bride gets her bouquet — the whole hen do erupts! ' +
+                 '+' + BRIDE_POINTS,
+        colour: '#d81159', // placeholder — comic strip art comes later
+      });
+      unlockAchievement('bridesBouquet', "Bride's Bouquet");
+      return;
+    }
+
     multUntil = frameNow + CHAT_MULT_MS;
     drunk = Math.max(0, drunk - SWAGGER_CHAT);
-    notify('Hen party chat! x' + CHAT_MULT + ' points');
+    notify('Hen party! x' + CHAT_MULT + ' points');
+  }
+
+  // SECRET: carrying a rose into the drunk lads — every lad gets one
+  function shareRoses(h) {
+    h.harmless = true;
+    h.ladsHaveRoses = true;
+    roses -= 1;
+    unlockAchievement('sharingTheLove', 'Sharing the Love');
   }
 
   // ---------------------------------------------------------------------
@@ -1147,8 +1175,8 @@
     ctx.beginPath();
     ctx.moveTo(depthToX(xa, 0), hy);
     ctx.lineTo(depthToX(xb, 0), hy);
-    ctx.lineTo(depthToX(xb, dMax), H);
-    ctx.lineTo(depthToX(xa, dMax), H);
+    ctx.lineTo(depthToX(xb, dMax), gameBottom());
+    ctx.lineTo(depthToX(xa, dMax), gameBottom());
     ctx.closePath();
     ctx.fill();
   }
@@ -1159,7 +1187,7 @@
     ctx.lineWidth = width;
     ctx.beginPath();
     ctx.moveTo(depthToX(x, 0), horizonY());
-    ctx.lineTo(depthToX(x, bottomDepth()), H);
+    ctx.lineTo(depthToX(x, bottomDepth()), gameBottom());
     ctx.stroke();
   }
 
@@ -1198,7 +1226,7 @@
     ctx.beginPath();
     ctx.moveTo(depthToX(xs, 0), hy);
     ctx.lineTo(0, hy);
-    ctx.lineTo(0, H);
+    ctx.lineTo(0, gameBottom());
     ctx.lineTo(depthToX(xs, dMax), sunkenY(dMax, shoreDrop));
     ctx.closePath();
     ctx.fill();
@@ -1300,7 +1328,7 @@
       var x = left + (promenadeWidth() / GRID_COLUMNS) * i;
       ctx.beginPath();
       ctx.moveTo(depthToX(x, 0), horizonY());
-      ctx.lineTo(depthToX(x, dMax), H);
+      ctx.lineTo(depthToX(x, dMax), gameBottom());
       ctx.stroke();
     }
 
@@ -1380,18 +1408,12 @@
     roundRect(x - bodyW / 2, y - bodyH / 2 + bob, bodyW, bodyH, bodyW * 0.35);
     ctx.fill();
 
-    // Head circle
-    var headY = y - bodyH / 2 - headR * 0.7 + bob;
+    // Head circle (wares bought from vendors show on the squad row,
+    // not here — we only ever see the back of the player's head)
     ctx.fillStyle = '#f4d1ae';
     ctx.beginPath();
-    ctx.arc(x, headY, headR, 0, Math.PI * 2);
+    ctx.arc(x, y - bodyH / 2 - headR * 0.7 + bob, headR, 0, Math.PI * 2);
     ctx.fill();
-
-    // Cosmetic shades from the looky looky man
-    if (hasShades) {
-      ctx.fillStyle = '#1d1d2b';
-      ctx.fillRect(x - headR * 0.85, headY - headR * 0.3, headR * 1.7, headR * 0.42);
-    }
   }
 
   function roundRect(x, y, w, h, r) {
@@ -1470,6 +1492,16 @@
           ctx.moveTo(xx - ww * 0.4, yy - bob - ww * 1.25);
           ctx.lineTo(xx + ww * 0.4, yy - bob - ww * 0.35);
           ctx.stroke();
+          if (h.bride && i === 0) {
+            // The bride: white veil over the lead hen
+            var headY2 = yy - bob - ww * 1.35 - ww * 0.24;
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            ctx.beginPath();
+            ctx.arc(xx, headY2 - ww * 0.08, ww * 0.55, Math.PI, 0);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+            ctx.fillRect(xx - ww * 0.55, headY2 - ww * 0.08, ww * 1.1, ww * 0.5);
+          }
         } else {
           // Drunk lads: stocky, square-shouldered, visibly swaying,
           // pint in hand
@@ -1589,17 +1621,50 @@
     }
 
     if (h.key === 'performer' && h.variant === 'lookyMan') {
-      // Looky looky man: vendor with a tray of sunglasses and a
-      // permanent sales pitch overhead
-      drawFigure(x2, y2, w2, w2 * 1.6, '#e09f3e');
+      // Looky looky man — a Black street vendor (placeholder shapes;
+      // PHASE 2 ART BRIEF: real sprite should depict a Black man with
+      // his wares tray). Three wares variants share the silhouette,
+      // the tray contents differ.
+      var bodyC = '#e09f3e';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(x2, y2, w2 * 0.7, w2 * 0.26, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = bodyC;
+      roundRect(x2 - w2 / 2, y2 - w2 * 1.6, w2, w2 * 1.6, w2 * 0.35);
+      ctx.fill();
+      ctx.fillStyle = '#5a3825'; // placeholder skin tone
+      ctx.beginPath();
+      ctx.arc(x2, y2 - w2 * 1.6 - w2 * 0.24, w2 * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.fillStyle = '#4a3728'; // tray held out front
       ctx.fillRect(x2 - w2 * 0.75, y2 - w2 * 0.95, w2 * 1.5, w2 * 0.22);
-      ctx.fillStyle = '#1d1d2b'; // pairs of shades on the tray
-      for (var g2 = -1; g2 <= 1; g2++) {
-        ctx.beginPath();
-        ctx.arc(x2 + g2 * w2 * 0.42 - w2 * 0.09, y2 - w2 * 1.02, w2 * 0.08, 0, Math.PI * 2);
-        ctx.arc(x2 + g2 * w2 * 0.42 + w2 * 0.09, y2 - w2 * 1.02, w2 * 0.08, 0, Math.PI * 2);
-        ctx.fill();
+
+      var ty = y2 - w2 * 1.02;
+      var g2;
+      if (h.wares === 'hat') {
+        ctx.fillStyle = '#8b5a2b'; // little hats on the tray
+        for (g2 = -1; g2 <= 1; g2++) {
+          ctx.fillRect(x2 + g2 * w2 * 0.42 - w2 * 0.14, ty - w2 * 0.06, w2 * 0.28, w2 * 0.1);
+          ctx.fillRect(x2 + g2 * w2 * 0.42 - w2 * 0.08, ty - w2 * 0.16, w2 * 0.16, w2 * 0.1);
+        }
+      } else if (h.wares === 'chain') {
+        ctx.strokeStyle = '#ffd700'; // chains draped over the tray
+        ctx.lineWidth = Math.max(1.5, w2 * 0.07);
+        for (g2 = -1; g2 <= 1; g2++) {
+          ctx.beginPath();
+          ctx.arc(x2 + g2 * w2 * 0.42, ty - w2 * 0.04, w2 * 0.13, 0.15 * Math.PI, 0.85 * Math.PI);
+          ctx.stroke();
+        }
+      } else {
+        ctx.fillStyle = '#1d1d2b'; // pairs of shades on the tray
+        for (g2 = -1; g2 <= 1; g2++) {
+          ctx.beginPath();
+          ctx.arc(x2 + g2 * w2 * 0.42 - w2 * 0.09, ty, w2 * 0.08, 0, Math.PI * 2);
+          ctx.arc(x2 + g2 * w2 * 0.42 + w2 * 0.09, ty, w2 * 0.08, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       // Speech bubble, always visible while he's on screen
       var bw2 = Math.max(52, w2 * 2.4);
@@ -1925,22 +1990,7 @@
         ctx.fillText('x' + roses, rx2 + 6, my + 3);
       }
     }
-    if (hasShades) {
-      var sx2 = mx + mw + 16;
-      ctx.fillStyle = '#1d1d2b';
-      ctx.beginPath();
-      ctx.arc(sx2 - 4, my + 2, 3.5, 0, Math.PI * 2);
-      ctx.arc(sx2 + 4, my + 2, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#1d1d2b';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(sx2 - 1, my + 1);
-      ctx.lineTo(sx2 + 1, my + 1);
-      ctx.stroke();
-    }
-
-    // Second row: points (with the chat multiplier) and dodge streak
+    // Second row: points (with the hen bonus multiplier) and dodge streak
     var rowMid = top + stripH + rowH / 2 - 2;
     ctx.font = '11px "DM Mono", monospace';
     ctx.textAlign = 'left';
@@ -1981,22 +2031,71 @@
     ctx.fill();
   }
 
-  // PLACEHOLDER: squad avatar row. Phase 3's squad size / lives system
-  // will replace these empty circles with real member avatars and the
-  // greyed-out (knocked out) state — do not build that logic here yet.
-  function drawSquadRow() {
-    var n = 4;
-    var gap = 40;
-    var y = safeTop + 78;
-    var x0 = W / 2 - ((n - 1) * gap) / 2;
-    for (var i = 0; i < n; i++) {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+  // One squad avatar with everything the group has bought so far —
+  // wares from the looky looky men appear on EVERY avatar, the shared
+  // haul being the reward. The player's own avatar is the big one and
+  // also shows the carried rose.
+  function drawAvatar(x, y, r, isPlayer) {
+    ctx.fillStyle = isPlayer ? '#e63946' : 'rgba(255, 255, 255, 0.10)';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    if (squadItems.shades) {
+      ctx.fillStyle = '#1d1d2b';
+      ctx.fillRect(x - r * 0.75, y - r * 0.35, r * 1.5, r * 0.34);
+    }
+    if (squadItems.hat) {
+      ctx.fillStyle = '#8b5a2b';
+      ctx.fillRect(x - r * 0.85, y - r * 1.05, r * 1.7, r * 0.22);
+      ctx.fillRect(x - r * 0.5, y - r * 1.45, r, r * 0.45);
+    }
+    if (squadItems.chain) {
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = Math.max(1.5, r * 0.12);
       ctx.beginPath();
-      ctx.arc(x0 + i * gap, y, 13, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
-      ctx.lineWidth = 1.5;
+      ctx.arc(x, y + r * 0.15, r * 0.62, 0.15 * Math.PI, 0.85 * Math.PI);
       ctx.stroke();
+    }
+    if (isPlayer && roses > 0) {
+      ctx.strokeStyle = '#2c7a49';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + r * 0.95, y + r * 0.5);
+      ctx.lineTo(x + r * 0.95, y - r * 0.5);
+      ctx.stroke();
+      ctx.fillStyle = '#ff4d6d';
+      ctx.beginPath();
+      ctx.arc(x + r * 0.95, y - r * 0.7, r * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // The control footer: a dedicated zone below the gameplay view holding
+  // the joystick and the squad avatar row (the group's outfit display).
+  // PLACEHOLDER: the three smaller circles await Phase 3's squad size /
+  // lives system for real member avatars and greyed-out states — only
+  // the layout and shared-wares display live here for now.
+  function drawFooter() {
+    var gb = gameBottom();
+
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(0, gb, W, FOOTER_H);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.fillRect(0, gb, W, 2);
+
+    // Squad row centred in the space the joystick doesn't use
+    var stickReserve = 160;
+    var areaStart = joySide === 'left' ? stickReserve : 0;
+    var cx = areaStart + (W - stickReserve) / 2;
+    var cy = gb + FOOTER_H / 2;
+
+    drawAvatar(cx - 56, cy, 22, true); // the player, noticeably larger
+    for (var i = 0; i < 3; i++) {
+      drawAvatar(cx + i * 34, cy, 12, false);
     }
   }
 
@@ -2047,8 +2146,8 @@
     if (shaking) ctx.restore();
 
     if (state !== STATE_TITLE) {
+      drawFooter(); // covers any world overdraw below the gameplay view
       drawHUD();
-      drawSquadRow();
       if (state === STATE_READY || state === STATE_WALKING) drawJoystick();
     }
 
