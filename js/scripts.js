@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.7.0';
+  var VERSION = '0.7.1';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -26,6 +26,7 @@
   var ctx = canvas.getContext('2d');
   var W = 0;                     // CSS pixel width
   var H = 0;                     // CSS pixel height
+  var safeTop = 0;               // device status bar / notch inset, CSS px
 
   function resize() {
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -36,9 +37,15 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // env(safe-area-inset-top) via the hidden probe element — non-zero on
+    // notched iPhones (Safari tab and installed PWA), zero elsewhere
+    var probe = document.getElementById('safe-probe');
+    safeTop = probe ? (parseFloat(getComputedStyle(probe).paddingTop) || 0) : 0;
   }
 
   window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', resize);
   resize();
 
   // ---------------------------------------------------------------------
@@ -449,11 +456,13 @@
   var PICKUP_INTERVAL_MIN = 5.5;  // seconds between pickup spawns
   var PICKUP_INTERVAL_MAX = 8.5;
 
-  // Drunk tuning — deliberately surfaced as constants for playtesting
-  var LAG_PER_BEER_MS = 100;      // added input-to-response delay per beer
-  var SWAY_AMP_PER_BEER = 0.016;  // involuntary drift, promenade-widths per beer
-  var SWAY_FREQ_BASE = 0.5;       // sway cycles per second when barely drunk
-  var SWAY_FREQ_PER_BEER = 0.06;  // and how much faster it gets per beer
+  // Drunk tuning — deliberately surfaced as constants for playtesting.
+  // Tuned so 1-2 beers is wobbly but comfortable; 4-5+ is where the
+  // controls get genuinely loose.
+  var LAG_PER_BEER_MS = 55;       // added input-to-response delay per beer
+  var SWAY_AMP_PER_BEER = 0.007;  // involuntary drift, promenade-widths per beer
+  var SWAY_FREQ_BASE = 0.4;       // sway cycles per second when barely drunk
+  var SWAY_FREQ_PER_BEER = 0.04;  // and how much faster it gets per beer
   var DRUNK_METER_MAX = 8;        // meter display cap (value itself is uncapped)
 
   var pickups = [];
@@ -1291,10 +1300,13 @@
 
   function drawHUD() {
     var stripH = 44;
+    var top = safeTop; // clear of the phone's own status bar / notch
+    var mid = top + stripH / 2;
 
-    // Translucent dark strip
+    // Translucent dark strip, extended up behind the status bar area so
+    // the inset doesn't read as a floating gap
     ctx.fillStyle = 'rgba(10, 22, 40, 0.72)';
-    ctx.fillRect(0, 0, W, stripH);
+    ctx.fillRect(0, 0, W, top + stripH);
 
     ctx.textBaseline = 'middle';
     ctx.font = '16px "DM Mono", monospace';
@@ -1302,23 +1314,23 @@
     // Distance top left
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'left';
-    ctx.fillText(Math.floor(distance) + 'm / ' + RUN_DISTANCE + 'm', 14, stripH / 2);
+    ctx.fillText(Math.floor(distance) + 'm / ' + RUN_DISTANCE + 'm', 14, mid);
 
     // Timer top right
     ctx.fillStyle = '#ffd166';
     ctx.textAlign = 'right';
-    ctx.fillText(elapsed.toFixed(1) + 's', W - 14, stripH / 2);
+    ctx.fillText(elapsed.toFixed(1) + 's', W - 14, mid);
 
     // Drunk meter, centre of the strip
     var mw = 80;
     var mh = 8;
     var mx = W / 2 - mw / 2;
-    var my = stripH / 2 + 3;
+    var my = mid + 3;
 
     ctx.font = '9px "DM Mono", monospace';
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.fillText('DRUNK', W / 2, stripH / 2 - 8);
+    ctx.fillText('DRUNK', W / 2, mid - 8);
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.lineWidth = 1;
