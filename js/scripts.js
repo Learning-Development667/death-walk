@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.6.0';
+  var VERSION = '0.6.1';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1047,21 +1047,25 @@
       return;
     }
 
-    // Bench: slatted seat and backrest on dark legs
+    // Bench: dual-sided promenade bench — seats facing both the walkway
+    // and the beach, back-to-back around a shared central backrest
     var bh = w * 0.55;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
     ctx.beginPath();
     ctx.ellipse(x, y, w * 0.55, w * 0.14, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#4a3728'; // legs
+    ctx.fillStyle = '#4a3728'; // legs at both ends
     ctx.fillRect(x - w * 0.42, y - bh * 0.45, w * 0.08, bh * 0.45);
     ctx.fillRect(x + w * 0.34, y - bh * 0.45, w * 0.08, bh * 0.45);
 
-    ctx.fillStyle = '#a0623a'; // seat and backrest slats
-    ctx.fillRect(x - w * 0.5, y - bh * 0.55, w, bh * 0.16);
-    ctx.fillRect(x - w * 0.5, y - bh * 0.95, w, bh * 0.13);
-    ctx.fillRect(x - w * 0.5, y - bh * 1.2, w, bh * 0.13);
+    ctx.fillStyle = '#a0623a'; // a seat either side of the centre back
+    ctx.fillRect(x - w * 0.5, y - bh * 0.55, w * 0.44, bh * 0.16);
+    ctx.fillRect(x + w * 0.06, y - bh * 0.55, w * 0.44, bh * 0.16);
+
+    ctx.fillStyle = '#7d4b2b'; // shared central backrest, seen end-on
+    ctx.fillRect(x - w * 0.07, y - bh * 1.3, w * 0.14, bh * 0.75);
+    ctx.fillRect(x - w * 0.12, y - bh * 1.44, w * 0.24, bh * 0.14);
   }
 
   // Hazards and fixed scenery drawn together, far-to-near so overlaps
