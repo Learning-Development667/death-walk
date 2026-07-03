@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.10.0';
+  var VERSION = '0.10.1';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1381,11 +1381,16 @@
   }
 
   function drawPlayer(time) {
-    var x = playerScreenX();
     var y = avatarY();
     // Scale with the avatar's depth so stepping forward/back reads true
     var dA = (y - horizonY()) / (playerY() - horizonY());
     var sc = spreadOf(dA);
+    // Project the avatar's x through its actual depth so u = 0..1 always
+    // spans wall-to-kerb AT that depth — stepping forward can no longer
+    // carry the sprite outside the narrowing promenade into the
+    // buildings, and u = 0 stays exactly on the Tiki Tumble edge at
+    // every depth
+    var x = depthToX(playerScreenX(), dA);
     var bodyW = playerWidth() * sc;
     var bodyH = bodyW * 1.5;
     var headR = bodyW * 0.42;
