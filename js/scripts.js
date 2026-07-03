@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.6.1';
+  var VERSION = '0.6.2';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1047,25 +1047,78 @@
       return;
     }
 
-    // Bench: dual-sided promenade bench — seats facing both the walkway
-    // and the beach, back-to-back around a shared central backrest
-    var bh = w * 0.55;
+    // Bench: dual-sided promenade bench, drawn with genuine front-to-back
+    // length receding toward the horizon — near and far ends are each
+    // projected through their own depth (same technique as the ledge
+    // steps and kerb lines), so the seats and backrest are true 3D
+    // planks rather than a flat cutout facing the camera.
+    var lenM = 1.8;                 // physical length along the route
+    var dNear = depthOf(m - lenM / 2);
+    var dFar = depthOf(m + lenM / 2);
+    var yNear = depthToY(dNear);
+    var yFar = depthToY(dFar);
+    var sNear = spreadOf(dNear);
+    var sFar = spreadOf(dFar);
+    var centreAtPlayer = promenadeLeft() + promenadeWidth() * it.u;
+    var xNear = depthToX(centreAtPlayer, dNear);
+    var xFar = depthToX(centreAtPlayer, dFar);
+
+    var seatOff = cfg.width * 0.5;  // centre to outer seat edge
+    var backOff = cfg.width * 0.06; // backrest half-thickness
+    var legOff = cfg.width * 0.36;  // centre to leg position
+    var legW = cfg.width * 0.07;
+    var seatH = cfg.width * 0.16;   // seat height above the ground
+    var backH = cfg.width * 0.6;    // backrest height above the seat
+
+    // Shadow footprint — bigger at the near end, same recession cue
+    // every other piece of scenery uses
     ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
     ctx.beginPath();
-    ctx.ellipse(x, y, w * 0.55, w * 0.14, 0, 0, Math.PI * 2);
+    ctx.ellipse(xNear, yNear, seatOff * sNear * 1.05, seatOff * sNear * 0.3, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#4a3728'; // legs at both ends
-    ctx.fillRect(x - w * 0.42, y - bh * 0.45, w * 0.08, bh * 0.45);
-    ctx.fillRect(x + w * 0.34, y - bh * 0.45, w * 0.08, bh * 0.45);
+    // Legs at both ends, both sides — smaller and higher toward the horizon
+    ctx.fillStyle = '#3d2c20';
+    ctx.fillRect(xFar - legOff * sFar - legW * sFar / 2, yFar, legW * sFar, -seatH * sFar);
+    ctx.fillRect(xFar + legOff * sFar - legW * sFar / 2, yFar, legW * sFar, -seatH * sFar);
+    ctx.fillRect(xNear - legOff * sNear - legW * sNear / 2, yNear, legW * sNear, -seatH * sNear);
+    ctx.fillRect(xNear + legOff * sNear - legW * sNear / 2, yNear, legW * sNear, -seatH * sNear);
 
-    ctx.fillStyle = '#a0623a'; // a seat either side of the centre back
-    ctx.fillRect(x - w * 0.5, y - bh * 0.55, w * 0.44, bh * 0.16);
-    ctx.fillRect(x + w * 0.06, y - bh * 0.55, w * 0.44, bh * 0.16);
+    // Two seat planks flanking the backrest — one facing the beach, one
+    // facing the promenade — each a quad running from the near end to
+    // the far end so it visibly recedes rather than sitting flat
+    ctx.fillStyle = '#a0623a';
+    var sides = [-1, 1];
+    for (var si = 0; si < sides.length; si++) {
+      var sd = sides[si];
+      ctx.beginPath();
+      ctx.moveTo(xNear + sd * seatOff * sNear, yNear - seatH * sNear);
+      ctx.lineTo(xNear + sd * backOff * sNear, yNear - seatH * sNear);
+      ctx.lineTo(xFar + sd * backOff * sFar, yFar - seatH * sFar);
+      ctx.lineTo(xFar + sd * seatOff * sFar, yFar - seatH * sFar);
+      ctx.closePath();
+      ctx.fill();
+    }
 
-    ctx.fillStyle = '#7d4b2b'; // shared central backrest, seen end-on
-    ctx.fillRect(x - w * 0.07, y - bh * 1.3, w * 0.14, bh * 0.75);
-    ctx.fillRect(x - w * 0.12, y - bh * 1.44, w * 0.24, bh * 0.14);
+    // Shared central backrest, a panel running the same near-to-far length
+    ctx.fillStyle = '#7d4b2b';
+    ctx.beginPath();
+    ctx.moveTo(xNear, yNear - seatH * sNear);
+    ctx.lineTo(xNear, yNear - (seatH + backH) * sNear);
+    ctx.lineTo(xFar, yFar - (seatH + backH) * sFar);
+    ctx.lineTo(xFar, yFar - seatH * sFar);
+    ctx.closePath();
+    ctx.fill();
+
+    // Top rail cap along the backrest, tapering toward the horizon
+    ctx.fillStyle = '#5c3820';
+    ctx.beginPath();
+    ctx.moveTo(xNear - backOff * 1.8 * sNear, yNear - (seatH + backH) * sNear);
+    ctx.lineTo(xNear + backOff * 1.8 * sNear, yNear - (seatH + backH) * sNear);
+    ctx.lineTo(xFar + backOff * 1.8 * sFar, yFar - (seatH + backH) * sFar);
+    ctx.lineTo(xFar - backOff * 1.8 * sFar, yFar - (seatH + backH) * sFar);
+    ctx.closePath();
+    ctx.fill();
   }
 
   // Hazards and fixed scenery drawn together, far-to-near so overlaps
