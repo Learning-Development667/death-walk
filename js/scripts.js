@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.7.1';
+  var VERSION = '0.7.2';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -179,11 +179,18 @@
     playerU = 0.5;
     targetU = 0.5;
     hazards.length = 0;
-    spawnTimer = 0.02; // hazards from the very first walking frame
+    spawnTimer = 0.02; // and keep spawning from the very first frame
     pickups.length = 0;
     pickupTimer = 3;
     drunk = 0;
     inputLog.length = 0;
+
+    // Pre-populate the corridor so the run starts as busy as it plays:
+    // hazards spawn 25-110m out and take time to arrive, so an empty
+    // start would otherwise stay empty for the first ~40m.
+    for (var i = 0; i < 8; i++) {
+      spawnHazard(10 + i * 10 + Math.random() * 6);
+    }
     invulnUntil = 0;
     shakeUntil = 0;
     flashUntil = 0;
@@ -257,9 +264,9 @@
   }
 
   // The raw target as the avatar perceives it: the input sample from
-  // (drunk × LAG_PER_BEER_MS) milliseconds ago.
+  // (drunkFactor × LAG_MAX_MS) milliseconds ago.
   function laggedTargetU() {
-    var lagMs = drunk * LAG_PER_BEER_MS;
+    var lagMs = drunkFactor() * LAG_MAX_MS;
     if (lagMs <= 0 || inputLog.length === 0) return targetU;
     var cutoff = frameNow - lagMs;
     var u = inputLog[0].u; // input older than the whole log: use oldest
@@ -272,12 +279,14 @@
     return u;
   }
 
-  // Side-to-side drift that grows in amplitude and frequency with the
-  // meter. Two offset sine waves so it feels organic, not metronomic.
+  // Side-to-side drift that grows in amplitude and frequency along the
+  // drunk curve, capped at the *_MAX severity. Two offset sine waves so
+  // it feels organic, not metronomic.
   function swayOffset() {
     var t = frameNow / 1000;
-    var freq = SWAY_FREQ_BASE + SWAY_FREQ_PER_BEER * drunk;
-    return drunk * SWAY_AMP_PER_BEER * (
+    var f = drunkFactor();
+    var freq = SWAY_FREQ_BASE + (SWAY_FREQ_MAX - SWAY_FREQ_BASE) * f;
+    return SWAY_AMP_MAX * f * (
       Math.sin(Math.PI * 2 * freq * t) +
       0.5 * Math.sin(Math.PI * 2 * freq * 1.7 * t + 1.3)
     );
@@ -457,12 +466,23 @@
   var PICKUP_INTERVAL_MAX = 8.5;
 
   // Drunk tuning — deliberately surfaced as constants for playtesting.
-  // Tuned so 1-2 beers is wobbly but comfortable; 4-5+ is where the
-  // controls get genuinely loose.
-  var LAG_PER_BEER_MS = 55;       // added input-to-response delay per beer
-  var SWAY_AMP_PER_BEER = 0.007;  // involuntary drift, promenade-widths per beer
+  // Effects ramp along a controlled curve from sober to the cap and
+  // never exceed it: the *_MAX values are the old 4-beer severity, now
+  // the hardest the game ever gets, and DRUNK_CURVE shapes the climb
+  // (>1 = the first beers are gentle steps, later ones bigger ones).
+  var DRUNK_EFFECT_CAP = 4;       // beers at which effects max out
+  var DRUNK_CURVE = 1.5;          // exponent shaping the 0..cap ramp
+  var LAG_MAX_MS = 220;           // input lag at the cap
+  var SWAY_AMP_MAX = 0.028;       // sway amplitude at the cap, promenade-widths
   var SWAY_FREQ_BASE = 0.4;       // sway cycles per second when barely drunk
-  var SWAY_FREQ_PER_BEER = 0.04;  // and how much faster it gets per beer
+  var SWAY_FREQ_MAX = 0.56;       // sway frequency at the cap
+
+  // 0 sober -> 1 at the cap, eased so early beers are small steps;
+  // beers past the cap change nothing but the meter.
+  function drunkFactor() {
+    var f = Math.min(drunk, DRUNK_EFFECT_CAP) / DRUNK_EFFECT_CAP;
+    return Math.pow(f, DRUNK_CURVE);
+  }
   var DRUNK_METER_MAX = 8;        // meter display cap (value itself is uncapped)
 
   var pickups = [];
@@ -500,13 +520,16 @@
     return last;
   }
 
-  function spawnHazard() {
+  // Spawn a hazard in its type's usual window ahead, or at an explicit
+  // distance (used to pre-populate the promenade at run start).
+  function spawnHazard(metresAhead) {
     var key = weightedPick(HAZARD_TYPES);
     var cfg = HAZARD_TYPES[key];
     var h = {
       key: key,
       cfg: cfg,
-      worldZ: distance + cfg.spawn[0] + Math.random() * (cfg.spawn[1] - cfg.spawn[0]),
+      worldZ: distance + (metresAhead !== undefined ? metresAhead :
+        cfg.spawn[0] + Math.random() * (cfg.spawn[1] - cfg.spawn[0])),
       age: 0,
       hit: false, // ground patches only trigger once
       members: null,
