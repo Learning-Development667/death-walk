@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.13.0';
+  var VERSION = '0.14.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -448,14 +448,19 @@
   }
 
   // ---------------------------------------------------------------------
-  // The finish — and the chip shop just past it. Walking into Daytona at
-  // 400m ends the run as normal; hugging the building side and pressing
-  // on to the doorway beyond instead buys everyone chips. No hints.
+  // The finish — and the chip shop just past it. Daytona is a real,
+  // visible entrance with its own depth window, NOT a full-width
+  // tripwire at 400m: you finish by actually walking into it, and you
+  // walk past it by simply not being in it. (The old gate auto-finished
+  // the run on the frame 400m was crossed unless the player was already
+  // hugging the far right — which made walking past impossible in
+  // practice.)
   // ---------------------------------------------------------------------
-  var CHIP_EXTRA_M = 12;       // the shop sits this far past Daytona
-  var CHIP_LANE_U = 0.78;      // stay right of this to walk on past Daytona
-  var CHIP_DOOR_U = 0.9;       // where the doorway is drawn
-  var CHIP_DOOR_MIN_U = 0.82;  // and how far right you must be to enter it
+  var DAYTONA_DOOR_MAX_U = 0.72; // the entrance spans the promenade up to here
+  var DAYTONA_DEPTH_M = 3;       // and is this deep front-to-back
+  var CHIP_EXTRA_M = 12;         // the chip shop sits this far past Daytona
+  var CHIP_DOOR_U = 0.9;         // where the chip doorway is drawn
+  var CHIP_DOOR_MIN_U = 0.82;    // how far right you must be to enter it
   var CHIP_POINTS = 750;
   var OLD_TOWN_MSG =
     'Uh oh, you have ended up in old town and missed the Daytona party.';
@@ -464,18 +469,20 @@
     return RUN_DISTANCE + CHIP_EXTRA_M;
   }
 
-  // Three outcomes: into Daytona at the line = the normal finish; ride
-  // the building side past it and through the chip shop door = the
-  // secret ending; sail past both without entering either = lost in
-  // old town.
+  // Three outcomes, all judged where the avatar actually stands: step
+  // into the Daytona entrance = the normal finish; walk on past and
+  // through the chip shop door = the secret ending; sail past both
+  // without entering either = lost in old town.
   function checkFinish() {
-    if (distance < RUN_DISTANCE) return;
-    if (distance >= chipShopZ()) {
+    var eff = distance + playerM(); // the avatar's true depth position
+    if (eff < RUN_DISTANCE) return;
+    if (eff >= chipShopZ()) {
       finishRun(playerU >= CHIP_DOOR_MIN_U ? 'chips' : 'oldtown');
-    } else if (playerU <= CHIP_LANE_U) {
+    } else if (eff <= RUN_DISTANCE + DAYTONA_DEPTH_M &&
+               playerU <= DAYTONA_DOOR_MAX_U) {
       finishRun('daytona');
     }
-    // else: hugging the building side — keep walking past Daytona
+    // else: past (or right of) the entrance — keep walking
   }
 
   function finishRun(ending) {
@@ -1146,6 +1153,9 @@
       if (skidzSoiled && !cfg.ground && !h.harmless) {
         // Everyone can smell it: hazards abandon their own patterns and
         // home in on the player for the rest of the run
+        if (!h.soilLine) {
+          h.soilLine = SOIL_LINES[Math.floor(Math.random() * SOIL_LINES.length)];
+        }
         var pull = playerU - h.u;
         h.u += Math.max(-1, Math.min(1, pull * 6)) * HOMING_RATE * dt;
       } else if (h.wanderAmp) {
@@ -1516,9 +1526,10 @@
 
   // Skidz and the portaloo: use it and the accident is averted; pass it
   // by with him along and he goes for the rest of the run — and every
-  // hazard on the promenade homes in on the smell.
+  // hazard on the promenade homes in on the smell, heckling as they come.
   var skidzSoiled = false;
   var HOMING_RATE = 0.22; // widths/sec hazards close on the player when soiled
+  var SOIL_LINES = ['Dirty bastard!', 'He stinks!', 'Filthy bastard!'];
 
   function updateStops() {
     if (!portalooUsed) {
@@ -1928,6 +1939,28 @@
     ctx.closePath();
   }
 
+  // A white speech bubble with a tail, anchored above a figure. Shared
+  // by the looky looky man's pitch and the soiled-state heckling.
+  function drawBubble(x, tailY, text, w) {
+    var bw = Math.max(52, w * 2.4);
+    var bh = Math.max(16, w * 0.62);
+    var by = tailY - bh;
+    ctx.fillStyle = '#ffffff';
+    roundRect(x - bw / 2, by, bw, bh, bh * 0.4);
+    ctx.fill();
+    ctx.beginPath(); // bubble tail
+    ctx.moveTo(x - bh * 0.3, by + bh);
+    ctx.lineTo(x + bh * 0.3, by + bh);
+    ctx.lineTo(x, by + bh + bh * 0.45);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#0a1628';
+    ctx.font = Math.max(9, Math.round(w * 0.42)) + 'px "DM Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, by + bh / 2);
+  }
+
   // A simple standing figure: shadow, rounded body, head. Used by most
   // hazard types with different widths/heights/colours.
   function drawFigure(x, feetY, w, h, colour) {
@@ -2169,23 +2202,7 @@
         }
       }
       // Speech bubble, always visible while he's on screen
-      var bw2 = Math.max(52, w2 * 2.4);
-      var bh2 = Math.max(16, w2 * 0.62);
-      var by2 = y2 - w2 * 2.6 - bh2;
-      ctx.fillStyle = '#ffffff';
-      roundRect(x2 - bw2 / 2, by2, bw2, bh2, bh2 * 0.4);
-      ctx.fill();
-      ctx.beginPath(); // bubble tail
-      ctx.moveTo(x2 - bh2 * 0.3, by2 + bh2);
-      ctx.lineTo(x2 + bh2 * 0.3, by2 + bh2);
-      ctx.lineTo(x2, by2 + bh2 + bh2 * 0.45);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#0a1628';
-      ctx.font = Math.max(9, Math.round(w2 * 0.42)) + 'px "DM Sans", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Looky looky', x2, by2 + bh2 / 2);
+      drawBubble(x2, y2 - w2 * 2.6, 'Looky looky', w2);
       return;
     }
 
@@ -2402,6 +2419,43 @@
     ctx.fill();
   }
 
+  // The Daytona entrance at the 400m line: a wide glowing archway across
+  // the left-and-centre of the promenade — the thing you actually walk
+  // into to finish (or deliberately skirt to keep going).
+  function drawDaytona(it, m) {
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var y = depthToY(d);
+    var xL = depthToX(promenadeLeft() + promenadeWidth() * 0.02, d);
+    var xR = depthToX(promenadeLeft() + promenadeWidth() * DAYTONA_DOOR_MAX_U, d);
+    var ph = 150 * s; // pillar height
+
+    ctx.fillStyle = 'rgba(255, 77, 157, 0.18)'; // spill on the pavement
+    ctx.beginPath();
+    ctx.ellipse((xL + xR) / 2, y, (xR - xL) * 0.55, 16 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ff4d9d'; // pillars
+    ctx.fillRect(xL, y - ph, 10 * s, ph);
+    ctx.fillRect(xR - 10 * s, y - ph, 10 * s, ph);
+
+    ctx.fillStyle = '#1d1d2b'; // marquee header
+    ctx.fillRect(xL - 6 * s, y - ph - 26 * s, (xR - xL) + 12 * s, 26 * s);
+    ctx.fillStyle = '#ffd166';
+    ctx.font = Math.max(8, Math.round(15 * s)) + 'px "Bebas Neue", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('DAYTONA', (xL + xR) / 2, y - ph - 13 * s);
+
+    // dotted light bulbs along the header
+    ctx.fillStyle = '#ff4d9d';
+    for (var i = 0; i <= 6; i++) {
+      ctx.beginPath();
+      ctx.arc(xL + ((xR - xL) / 6) * i, y - ph - 26 * s, 2.5 * s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   // The chip shop doorway past Daytona: warm light spilling out of a
   // frame on the building side. Present in the world, never explained.
   function drawChipDoor(it, m) {
@@ -2501,6 +2555,7 @@
         items.push({ selfie: true, worldZ: SELFIE_SPOTS[i].z, u: SELFIE_SPOTS[i].u });
       }
     }
+    items.push({ daytona: true, worldZ: RUN_DISTANCE, u: 0.35 });
     items.push({ chipDoor: true, worldZ: chipShopZ(), u: CHIP_DOOR_U });
     items.push({ loo: true, worldZ: portalooZ(), u: PORTALOO_U });
     items.push({ ice: true, worldZ: steveShopZ(), u: ICE_SHOP_U });
@@ -2513,10 +2568,25 @@
       if (items[j].scenery) drawScenery(items[j], m);
       else if (items[j].pickup) drawPickup(items[j], m);
       else if (items[j].selfie) drawSelfie(items[j], m);
+      else if (items[j].daytona) drawDaytona(items[j], m);
       else if (items[j].chipDoor) drawChipDoor(items[j], m);
       else if (items[j].loo) drawPortaloo(items[j], m);
       else if (items[j].ice) drawIceShop(items[j], m);
-      else drawHazard(items[j], m);
+      else {
+        drawHazard(items[j], m);
+        // Soiled state: the whole promenade heckles as it closes in
+        if (items[j].soilLine && !items[j].harmless) {
+          var hd = depthOf(m);
+          var hs = spreadOf(hd);
+          var hw = items[j].cfg.width * hs;
+          drawBubble(
+            depthToX(promenadeLeft() + promenadeWidth() * items[j].u, hd),
+            depthToY(hd) - hw * 2.2,
+            items[j].soilLine,
+            hw
+          );
+        }
+      }
     }
   }
 
@@ -2735,8 +2805,10 @@
     playerSweepHi = Math.max(u0, playerU);
 
     if (state === STATE_WALKING && !paused) {
-      // walkRate() goes negative when the avatar pulls back down the band
-      distance = Math.max(0, Math.min(chipShopZ(), distance + walkRate() * dt));
+      // walkRate() goes negative when the avatar pulls back down the band;
+      // the top clamp sits past the chip shop so the avatar's effective
+      // depth can reach it even from the back of the movement band
+      distance = Math.max(0, Math.min(chipShopZ() + 3, distance + walkRate() * dt));
       elapsed += dt;
       updateHazards(dt);
       updatePickups(dt);
