@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.14.0';
+  var VERSION = '0.15.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -149,6 +149,12 @@
   var STATE_READY = 1;   // world visible, waiting for first movement
   var STATE_WALKING = 2; // run in progress
   var STATE_DONE = 3;    // reached Daytona, end screen showing
+
+  var MODE_CLASSIC = 0;  // Tiki Beach to Daytona, the 400m route + endings
+  var MODE_ENDLESS = 1;  // no finish, 5 beers for lives, go as far as you can
+  var gameMode = MODE_CLASSIC;
+  var ENDLESS_LIVES = 5;
+  var lives = 0;             // remaining beers in Endless
 
   var state = STATE_TITLE;
   var distance = 0;          // metres walked
@@ -406,6 +412,9 @@
     tumbleCount = 0;
     wallPressT = 0;
     shakeAmp = 6;
+    pendingEnding = null;
+    enteredEndZone = false;
+    lives = ENDLESS_LIVES; // only used/shown in Endless
 
     // Build this run's squad from the start-screen selection and drive
     // the character flags from the actual composition. The lead is the
@@ -456,12 +465,15 @@
   // hugging the far right — which made walking past impossible in
   // practice.)
   // ---------------------------------------------------------------------
-  var DAYTONA_DOOR_MAX_U = 0.72; // the entrance spans the promenade up to here
-  var DAYTONA_DEPTH_M = 3;       // and is this deep front-to-back
-  var CHIP_EXTRA_M = 12;         // the chip shop sits this far past Daytona
-  var CHIP_DOOR_U = 0.9;         // where the chip doorway is drawn
-  var CHIP_DOOR_MIN_U = 0.82;    // how far right you must be to enter it
+  var DAYTONA_ARCH_LEFT_U = 0.38; // the archway hugs the building side, from
+  var DAYTONA_DOOR_MIN_U = 0.42;  // here rightward — enter by being right of
+                                  // this, bypass by committing hard left
+  var DAYTONA_DEPTH_M = 3;        // and it's this deep front-to-back
+  var CHIP_EXTRA_M = 12;          // the chip shop sits this far past Daytona
+  var CHIP_DOOR_U = 0.9;          // where the chip doorway is drawn
+  var CHIP_DOOR_MIN_U = 0.82;     // how far right you must be to enter it
   var CHIP_POINTS = 750;
+  var END_ZONE_M = 26;            // desolate tumbleweed stretch past the shop
   var OLD_TOWN_MSG =
     'Uh oh, you have ended up in old town and missed the Daytona party.';
 
@@ -469,33 +481,67 @@
     return RUN_DISTANCE + CHIP_EXTRA_M;
   }
 
-  // Three outcomes, all judged where the avatar actually stands: step
-  // into the Daytona entrance = the normal finish; walk on past and
-  // through the chip shop door = the secret ending; sail past both
-  // without entering either = lost in old town.
+  function endOfRoute() {
+    return chipShopZ() + END_ZONE_M;
+  }
+
+  var pendingEnding = null;   // locked in when a doorway is entered
+  var enteredEndZone = false; // past the chip shop, into the tumbleweeds
+
+  // Classic outcomes, judged where the avatar actually stands. Daytona is
+  // a right-aligned archway at the line: step into it (right side) for the
+  // normal finish, or skirt hard down the left to bypass it. Past it, the
+  // chip shop door is the secret ending; miss both and you drift on into
+  // the desolate end zone and, eventually, old town. Endless never ends
+  // here — only when the beers run out.
   function checkFinish() {
+    if (gameMode === MODE_ENDLESS) return;
     var eff = distance + playerM(); // the avatar's true depth position
     if (eff < RUN_DISTANCE) return;
-    if (eff >= chipShopZ()) {
-      finishRun(playerU >= CHIP_DOOR_MIN_U ? 'chips' : 'oldtown');
-    } else if (eff <= RUN_DISTANCE + DAYTONA_DEPTH_M &&
-               playerU <= DAYTONA_DOOR_MAX_U) {
+
+    // Into the Daytona archway on the building side = the party
+    if (pendingEnding === null && !enteredEndZone &&
+        eff <= RUN_DISTANCE + DAYTONA_DEPTH_M && playerU >= DAYTONA_DOOR_MIN_U) {
       finishRun('daytona');
+      return;
     }
-    // else: past (or right of) the entrance — keep walking
+    // Through the chip shop door further along = chips (locked, not ended
+    // yet — you still walk it out through the end zone)
+    if (pendingEnding === null &&
+        eff >= chipShopZ() && eff <= chipShopZ() + DAYTONA_DEPTH_M &&
+        playerU >= CHIP_DOOR_MIN_U) {
+      pendingEnding = 'chips';
+    }
+    // Crossing into the end zone: clear the busy promenade ahead so it
+    // reads as the empty edge of town — tumbleweeds only from here
+    if (!enteredEndZone && eff > chipShopZ()) {
+      enteredEndZone = true;
+      for (var i = hazards.length - 1; i >= 0; i--) {
+        if (hazards[i].worldZ > distance && !hazards[i].harmless) {
+          hazards.splice(i, 1);
+        }
+      }
+    }
+    // The route properly concludes a short way into the end zone
+    if (eff >= endOfRoute()) {
+      finishRun(pendingEnding || 'oldtown');
+    }
   }
 
   function finishRun(ending) {
     state = STATE_DONE;
 
     if (ending === 'chips') addScore(CHIP_POINTS);
+    // Endless scores by how far you got, on top of what you collected
+    if (ending === 'endless') score += Math.floor(distance);
 
     // Squad payout: bigger starting squads score more, and bringing
     // every mate home intact is worth celebrating — no such glory if
-    // you led the whole squad into old town
+    // you led the whole squad into old town (or got wiped out endless)
     if (squad.length > 0) {
       score = Math.round(score * (1 + 0.15 * squad.length));
-      if (ending !== 'oldtown' && matesAlive() === squad.length) {
+      if (ending !== 'oldtown' && ending !== 'endless' &&
+          matesAlive() === squad.length) {
         score += 250 * squad.length;
         unlockAchievement('nobodyLeftBehind', 'Nobody Left Behind');
       }
@@ -505,10 +551,15 @@
       unlockAchievement('tikiTumbleSurvivor', 'Tiki Tumble Survivor');
     }
 
-    endTitleEl.innerHTML = ending === 'chips'
-      ? 'BOUGHT EVERYONE<br>CHIPS'
-      : (ending === 'oldtown' ? 'OLD TOWN' : 'YOU MADE IT<br>TO DAYTONA');
-    endMsgEl.textContent = ending === 'oldtown' ? OLD_TOWN_MSG : '';
+    endTitleEl.innerHTML =
+      ending === 'chips' ? 'BOUGHT EVERYONE<br>CHIPS' :
+      ending === 'oldtown' ? 'OLD TOWN' :
+      ending === 'endless' ? 'OUT OF BEERS' :
+      'YOU MADE IT<br>TO DAYTONA';
+    endMsgEl.textContent =
+      ending === 'oldtown' ? OLD_TOWN_MSG :
+      ending === 'endless' ? (Math.floor(distance) + 'm before the beers ran out') :
+      '';
     endTimeEl.textContent = elapsed.toFixed(1) + 's';
     endScoreEl.textContent = score + ' PTS';
     endScreen.classList.remove('hidden');
@@ -774,6 +825,33 @@
     });
   }
 
+  // Mode toggle — Classic (the 400m route) vs Endless (survive on beers)
+  var modeClassicBtn = document.getElementById('mode-classic');
+  var modeEndlessBtn = document.getElementById('mode-endless');
+  function syncModeUI() {
+    if (modeClassicBtn) {
+      modeClassicBtn.classList.toggle('lead', gameMode === MODE_CLASSIC);
+    }
+    if (modeEndlessBtn) {
+      modeEndlessBtn.classList.toggle('lead', gameMode === MODE_ENDLESS);
+    }
+  }
+  if (modeClassicBtn) {
+    modeClassicBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      gameMode = MODE_CLASSIC;
+      syncModeUI();
+    });
+  }
+  if (modeEndlessBtn) {
+    modeEndlessBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      gameMode = MODE_ENDLESS;
+      syncModeUI();
+    });
+  }
+  syncModeUI();
+
   // Two-step character selection built from the roster: step 1 picks the
   // lead (who you play as), step 2 toggles supporters. Whoever is the lead
   // can't also walk alongside, so their supporter chip is disabled.
@@ -865,6 +943,9 @@
                   effect: 'stumble', penalty: 2, weight: 10, colour: '#25ced1' },
     puke:       { speed: 0,   spawn: [40, 70],  width: 44, drift: 0, ground: true,
                   effect: 'skid', penalty: 0, weight: 13, colour: '#8aa62f' },
+    // Weight 0 — never in the normal mix; force-spawned in the end zone
+    tumbleweed: { speed: 1.0, spawn: [14, 26], width: 30, drift: 0.06,
+                  effect: 'stumble', penalty: 2, weight: 0, colour: '#b8895a' },
   };
 
   // ---------------------------------------------------------------------
@@ -972,9 +1053,12 @@
   var hazards = [];
   var spawnTimer = 1.5;
 
+  var SPAWN_INTERVAL_FLOOR = 0.35; // busiest it ever gets (Endless keeps ramping)
+
   function spawnInterval() {
-    var t = distance / RUN_DISTANCE;
-    return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_END - SPAWN_INTERVAL_START) * t;
+    var t = distance / RUN_DISTANCE; // keeps climbing past 1 in Endless
+    var v = SPAWN_INTERVAL_START + (SPAWN_INTERVAL_END - SPAWN_INTERVAL_START) * t;
+    return Math.max(SPAWN_INTERVAL_FLOOR, v);
   }
 
   function weightedPick(types) {
@@ -1118,8 +1202,18 @@
     shakeUntil = frameNow + STUMBLE_SHAKE_MS;
     shakeAmp = 6;
     flashUntil = frameNow + STUMBLE_FLASH_MS;
-    elapsed += cfg.penalty; // time penalty straight onto the run clock
     streak = 0;             // a real collision breaks the dodge streak
+
+    if (gameMode === MODE_ENDLESS) {
+      // A beer down instead of a time penalty; out of beers = out of run
+      lives -= 1;
+      if (lives <= 0) {
+        lives = 0;
+        finishRun('endless');
+      }
+    } else {
+      elapsed += cfg.penalty; // time penalty straight onto the run clock
+    }
 
     // A significant collision costs the group a mate; the last walker
     // is never removed — they just stumble like always
@@ -1139,8 +1233,14 @@
   function updateHazards(dt) {
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
-      spawnHazard();
-      spawnTimer = spawnInterval();
+      if (enteredEndZone) {
+        // Desolate edge of town: only the odd tumbleweed rolls through
+        spawnHazard(undefined, 'tumbleweed');
+        spawnTimer = 1.4 + Math.random() * 1.4;
+      } else {
+        spawnHazard();
+        spawnTimer = spawnInterval();
+      }
     }
     ensureRoseSeller();
 
@@ -1570,10 +1670,10 @@
             'fa-vor!” The vendor hands over the lot just to end it. ' +
             'Sugar-steadied, the squad marches on.');
         } else {
-          // Steve's not with you — he still slides one over the counter
+          // Steve's not with you — you bump into him outside, ordering
           drunk = Math.max(0, drunk - STEVE_BOOST_SMALL);
-          showMessage('Steve leans out and passes an ice cream over ' +
-            'the counter. Have that one on him.');
+          showMessage('You meet Steve talking rubbish Spanish, but ' +
+            'somehow he manages to order you an ice cream.');
         }
       }
     }
@@ -1940,10 +2040,15 @@
   }
 
   // A white speech bubble with a tail, anchored above a figure. Shared
-  // by the looky looky man's pitch and the soiled-state heckling.
+  // by the looky looky man's pitch and the soiled-state heckling. The
+  // box sizes itself to the text so any line fits cleanly whatever its
+  // length.
   function drawBubble(x, tailY, text, w) {
-    var bw = Math.max(52, w * 2.4);
-    var bh = Math.max(16, w * 0.62);
+    var fontPx = Math.max(10, Math.round(w * 0.42));
+    ctx.font = fontPx + 'px "DM Sans", sans-serif';
+    var padX = fontPx * 0.7;
+    var bw = ctx.measureText(text).width + padX * 2;
+    var bh = fontPx + fontPx * 0.7;
     var by = tailY - bh;
     ctx.fillStyle = '#ffffff';
     roundRect(x - bw / 2, by, bw, bh, bh * 0.4);
@@ -1955,7 +2060,6 @@
     ctx.closePath();
     ctx.fill();
     ctx.fillStyle = '#0a1628';
-    ctx.font = Math.max(9, Math.round(w * 0.42)) + 'px "DM Sans", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, x, by + bh / 2);
@@ -2071,6 +2175,27 @@
     var x2 = depthToX(promenadeLeft() + promenadeWidth() * h.u, d2);
     var y2 = depthToY(d2);
     var w2 = cfg.width * s2;
+
+    if (h.key === 'tumbleweed') {
+      // A dry tangle rolling through the empty edge of town
+      var rr = w2 * 0.5;
+      var spin = h.age * 3;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+      ctx.beginPath();
+      ctx.ellipse(x2, y2, rr * 0.9, rr * 0.28, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = cfg.colour;
+      ctx.lineWidth = Math.max(1, w2 * 0.06);
+      ctx.beginPath();
+      ctx.arc(x2, y2 - rr, rr, 0, Math.PI * 2);
+      for (var tw = 0; tw < 6; tw++) {
+        var a = spin + tw * (Math.PI / 3);
+        ctx.moveTo(x2, y2 - rr);
+        ctx.lineTo(x2 + Math.cos(a) * rr, y2 - rr + Math.sin(a) * rr);
+      }
+      ctx.stroke();
+      return;
+    }
 
     if (h.key === 'scooter') {
       // Unmistakably a vehicle: chassis, wheels, steering column,
@@ -2419,15 +2544,15 @@
     ctx.fill();
   }
 
-  // The Daytona entrance at the 400m line: a wide glowing archway across
-  // the left-and-centre of the promenade — the thing you actually walk
-  // into to finish (or deliberately skirt to keep going).
+  // The Daytona entrance at the 400m line: a glowing archway hugging the
+  // building side, so the only way past is a committed skirt down the
+  // left. Walk into it (right side) to finish.
   function drawDaytona(it, m) {
     var d = depthOf(m);
     var s = spreadOf(d);
     var y = depthToY(d);
-    var xL = depthToX(promenadeLeft() + promenadeWidth() * 0.02, d);
-    var xR = depthToX(promenadeLeft() + promenadeWidth() * DAYTONA_DOOR_MAX_U, d);
+    var xL = depthToX(promenadeLeft() + promenadeWidth() * DAYTONA_ARCH_LEFT_U, d);
+    var xR = depthToX(promenadeLeft() + promenadeWidth() * 1.0, d);
     var ph = 150 * s; // pillar height
 
     ctx.fillStyle = 'rgba(255, 77, 157, 0.18)'; // spill on the pavement
@@ -2555,8 +2680,10 @@
         items.push({ selfie: true, worldZ: SELFIE_SPOTS[i].z, u: SELFIE_SPOTS[i].u });
       }
     }
-    items.push({ daytona: true, worldZ: RUN_DISTANCE, u: 0.35 });
-    items.push({ chipDoor: true, worldZ: chipShopZ(), u: CHIP_DOOR_U });
+    if (gameMode === MODE_CLASSIC) {
+      items.push({ daytona: true, worldZ: RUN_DISTANCE, u: 0.7 });
+      items.push({ chipDoor: true, worldZ: chipShopZ(), u: CHIP_DOOR_U });
+    }
     items.push({ loo: true, worldZ: portalooZ(), u: PORTALOO_U });
     items.push({ ice: true, worldZ: steveShopZ(), u: ICE_SHOP_U });
     items.sort(function (a, b) { return b.worldZ - a.worldZ; });
@@ -2590,6 +2717,24 @@
     }
   }
 
+  // A tiny pint icon for the Endless lives row — full amber when the
+  // life remains, hollow once it's spent.
+  function drawBeerIcon(x, y, filled) {
+    var w = 8, h = 11;
+    if (filled) {
+      ctx.fillStyle = '#ffc233';
+      roundRect(x - w / 2, y - h / 2, w, h, 1.5);
+      ctx.fill();
+      ctx.fillStyle = '#fff6e0'; // foam head
+      ctx.fillRect(x - w / 2, y - h / 2, w, 2.5);
+    } else {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.lineWidth = 1;
+      roundRect(x - w / 2, y - h / 2, w, h, 1.5);
+      ctx.stroke();
+    }
+  }
+
   function drawHUD() {
     var stripH = 44;
     var rowH = 16;     // second row: score and dodge streak
@@ -2604,15 +2749,26 @@
     ctx.textBaseline = 'middle';
     ctx.font = '16px "DM Mono", monospace';
 
-    // Distance top left
+    // Distance top left — Endless has no finish line to count toward
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'left';
-    ctx.fillText(Math.floor(distance) + 'm / ' + RUN_DISTANCE + 'm', 14, mid);
+    var distText = gameMode === MODE_ENDLESS
+      ? Math.floor(distance) + 'm'
+      : Math.floor(distance) + 'm / ' + RUN_DISTANCE + 'm';
+    ctx.fillText(distText, 14, mid);
 
     // Timer top right
     ctx.fillStyle = '#ffd166';
     ctx.textAlign = 'right';
     ctx.fillText(elapsed.toFixed(1) + 's', W - 14, mid);
+
+    // Endless lives — beers left, drawn just after the distance readout
+    if (gameMode === MODE_ENDLESS) {
+      var bx = 14 + ctx.measureText(distText).width + 14;
+      for (var li = 0; li < ENDLESS_LIVES; li++) {
+        drawBeerIcon(bx + li * 15, mid, li < lives);
+      }
+    }
 
     // Drunk meter, centre of the strip
     var mw = 80;
@@ -2805,10 +2961,10 @@
     playerSweepHi = Math.max(u0, playerU);
 
     if (state === STATE_WALKING && !paused) {
-      // walkRate() goes negative when the avatar pulls back down the band;
-      // the top clamp sits past the chip shop so the avatar's effective
-      // depth can reach it even from the back of the movement band
-      distance = Math.max(0, Math.min(chipShopZ() + 3, distance + walkRate() * dt));
+      // walkRate() goes negative when the avatar pulls back down the band.
+      // Classic clamps just past the end of the route; Endless never stops.
+      var topZ = gameMode === MODE_ENDLESS ? Infinity : endOfRoute() + 3;
+      distance = Math.max(0, Math.min(topZ, distance + walkRate() * dt));
       elapsed += dt;
       updateHazards(dt);
       updatePickups(dt);
