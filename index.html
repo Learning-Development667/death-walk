@@ -173,6 +173,27 @@
       border-color: #ffd166;
     }
 
+    .mate.lead {
+      color: #0a1628;
+      background: #8fb4d9;
+      border-color: #8fb4d9;
+    }
+
+    .mate:disabled {
+      opacity: 0.28;
+    }
+
+    .start-scroll {
+      overflow-y: auto;
+      justify-content: flex-start;
+      padding-top: calc(28px + env(safe-area-inset-top));
+      padding-bottom: 28px;
+    }
+
+    .mate-row {
+      max-width: 340px;
+    }
+
     .hand-row {
       display: flex;
       gap: 16px;
@@ -201,18 +222,14 @@
 <body>
   <canvas id="game"></canvas>
 
-  <div id="start-screen" class="overlay">
+  <div id="start-screen" class="overlay start-scroll">
     <div class="title">DEATH MARCH</div>
     <div class="subtitle">Tiki Beach to Daytona</div>
-    <div class="prompt">PICK YOUR SQUAD</div>
-    <div class="mate-row">
-      <button class="mate on" id="mate-you" disabled>YOU</button>
-      <button class="mate" id="mate-adam">ADAM</button>
-      <button class="mate" id="mate-lee">LEE</button>
-      <button class="mate" id="mate-robby">ROBBY</button>
-      <button class="mate" id="mate-steve">STEVE</button>
-    </div>
-    <div class="prompt small">CHOOSE YOUR THUMB</div>
+    <div class="prompt small">CHOOSE YOUR CHARACTER</div>
+    <div class="mate-row" id="char-row"></div>
+    <div class="prompt small">WHO'S WALKING WITH YOU</div>
+    <div class="mate-row" id="sup-row"></div>
+    <div class="prompt small">CHOOSE YOUR THUMB — TAP TO START</div>
     <div class="hand-row">
       <button class="btn" id="hand-left">LEFTY</button>
       <button class="btn" id="hand-right">RIGHTY</button>

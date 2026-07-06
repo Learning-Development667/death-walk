@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.11.0';
+  var VERSION = '0.11.1';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -157,6 +157,8 @@
   var targetU = 0.5;         // where the player is easing toward, 0..1
   var playerV = 0.5;         // vertical position in the movement band, 0..1
   var targetV = 0.5;         // where vertical input wants the player
+  var playerSweepLo = 0.5;   // horizontal span the player covered this frame,
+  var playerSweepHi = 0.5;   // so fast dodges are swept-tested, not point-tested
   var lastTime = 0;
   var frameNow = 0;          // current rAF timestamp, ms
   var paused = false;        // photo overlay showing — world frozen
@@ -203,18 +205,34 @@
   // hardcoded. (Full Firefly avatars and a proper "playing as" picker
   // come in Phase 4; until then, Lee in the squad = Lee flavour.)
   // ---------------------------------------------------------------------
-  var SQUAD_HAS_ADAM = false;  // true when Adam is picked into the squad
-  var PLAYING_AS_LEE = false;  // true when Lee is picked into the squad
+  var SQUAD_HAS_ADAM = false;  // true when Adam is the lead OR walking along
+  var PLAYING_AS_LEE = false;  // true only when Lee is the chosen lead
 
-  var MATE_ROSTER = {
-    adam:  { name: 'Adam',  colour: '#4d96ff' },
-    lee:   { name: 'Lee',   colour: '#7fd069' },
-    robby: { name: 'Robby', colour: '#f77f00' },
-    steve: { name: 'Steve', colour: '#25ced1' },
+  // The full roster. The player is always ONE of these (the lead), and any
+  // of the others can be picked to walk alongside. (Real Firefly avatars
+  // are Phase 2 — placeholder coloured circles for now.)
+  var ROSTER = {
+    robby:   { name: 'Robby',   colour: '#f77f00' },
+    lee:     { name: 'Lee',     colour: '#7fd069' },
+    al:      { name: 'Al',      colour: '#4d96ff' },
+    keith:   { name: 'Keith',   colour: '#ff70a6' },
+    skidz:   { name: 'Skidz',   colour: '#25ced1' },
+    phil:    { name: 'Phil',    colour: '#ffd166' },
+    adam:    { name: 'Adam',    colour: '#9d4edd' },
+    churchy: { name: 'Churchy', colour: '#e63946' },
+    shippy:  { name: 'Shippy',  colour: '#2a9d8f' },
+    steve:   { name: 'Steve',   colour: '#e09f3e' },
   };
+  var ROSTER_ORDER = ['robby', 'lee', 'al', 'keith', 'skidz', 'phil',
+                      'adam', 'churchy', 'shippy', 'steve'];
 
-  var mateSel = { adam: false, lee: false, robby: false, steve: false };
+  var leadChar = 'robby';      // who you're playing as this run
+  var mateSel = {};            // supporters walking with you, keyed by name
   var squad = [];              // this run's mates: {key, name, colour, lost}
+
+  function leadColour() {
+    return (ROSTER[leadChar] && ROSTER[leadChar].colour) || '#e63946';
+  }
   var SQUAD_WIDTH_PER_MATE = 0.30; // extra collision width per linked mate
 
   function matesAlive() {
@@ -352,6 +370,8 @@
     targetU = 0.5;
     playerV = neutralV();
     targetV = neutralV();
+    playerSweepLo = 0.5;
+    playerSweepHi = 0.5;
     hazards.length = 0;
     spawnTimer = 0.02; // and keep spawning from the very first frame
     pickups.length = 0;
@@ -378,20 +398,24 @@
     shakeAmp = 6;
 
     // Build this run's squad from the start-screen selection and drive
-    // the character flags from actual composition
+    // the character flags from the actual composition. The lead is the
+    // player themself, so they never appear as a supporter.
     squad = [];
-    for (var mk in MATE_ROSTER) {
-      if (mateSel[mk]) {
+    for (var si = 0; si < ROSTER_ORDER.length; si++) {
+      var mk = ROSTER_ORDER[si];
+      if (mk !== leadChar && mateSel[mk]) {
         squad.push({
           key: mk,
-          name: MATE_ROSTER[mk].name,
-          colour: MATE_ROSTER[mk].colour,
+          name: ROSTER[mk].name,
+          colour: ROSTER[mk].colour,
           lost: false,
         });
       }
     }
-    SQUAD_HAS_ADAM = !!mateSel.adam;
-    PLAYING_AS_LEE = !!mateSel.lee;
+    // Playing AS Lee needs Lee as the lead; Adam counts whether he's the
+    // lead or just walking along.
+    PLAYING_AS_LEE = (leadChar === 'lee');
+    SQUAD_HAS_ADAM = (leadChar === 'adam') || !!mateSel.adam;
 
     hidePhotoOverlay();
 
@@ -726,17 +750,53 @@
     });
   }
 
-  // Squad picker chips — toggle mates in and out before starting
-  for (var mateKey in MATE_ROSTER) {
-    (function (mk) {
-      var btn = document.getElementById('mate-' + mk);
-      if (!btn) return;
-      btn.addEventListener('click', function (e) {
+  // Two-step character selection built from the roster: step 1 picks the
+  // lead (who you play as), step 2 toggles supporters. Whoever is the lead
+  // can't also walk alongside, so their supporter chip is disabled.
+  var charRow = document.getElementById('char-row');
+  var supRow = document.getElementById('sup-row');
+  var charBtns = {};
+  var supBtns = {};
+
+  function syncSelectionUI() {
+    for (var i = 0; i < ROSTER_ORDER.length; i++) {
+      var k = ROSTER_ORDER[i];
+      charBtns[k].classList.toggle('lead', k === leadChar);
+      var isLead = (k === leadChar);
+      supBtns[k].disabled = isLead;
+      if (isLead) mateSel[k] = false; // can't walk with yourself
+      supBtns[k].classList.toggle('on', !!mateSel[k]);
+    }
+  }
+
+  if (charRow && supRow) {
+    ROSTER_ORDER.forEach(function (k) {
+      var label = ROSTER[k].name.toUpperCase();
+
+      var cb = document.createElement('button');
+      cb.className = 'mate';
+      cb.textContent = label;
+      cb.addEventListener('click', function (e) {
         e.stopPropagation();
-        mateSel[mk] = !mateSel[mk];
-        btn.classList.toggle('on', mateSel[mk]);
+        leadChar = k;
+        syncSelectionUI();
       });
-    })(mateKey);
+      charRow.appendChild(cb);
+      charBtns[k] = cb;
+
+      var sb = document.createElement('button');
+      sb.className = 'mate';
+      sb.textContent = label;
+      sb.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (k === leadChar) return;
+        mateSel[k] = !mateSel[k];
+        sb.classList.toggle('on', mateSel[k]);
+      });
+      supRow.appendChild(sb);
+      supBtns[k] = sb;
+    });
+    syncSelectionUI();
   }
 
   walkAgainBtn.addEventListener('click', function (e) {
@@ -1004,6 +1064,31 @@
     return playerGapTo(u, widthPx) <= 0;
   }
 
+  // Swept overlap: the player's horizontal travel span [playerSweepLo,
+  // playerSweepHi] this frame against a hazard's horizontal span [uLo, uHi]
+  // (a single point when uLo === uHi). Sweeping BOTH sides means neither a
+  // fast dodge nor a wide wandering group can slip through a per-point,
+  // per-frame sample.
+  function hitsPlayer(uLo, uHi, widthPx) {
+    var reach = (playerWidth() + widthPx) * 0.5 * 0.8; // slight forgiveness
+    var HL = promenadeLeft() + promenadeWidth() * uLo;
+    var HH = promenadeLeft() + promenadeWidth() * uHi;
+    var PL = promenadeLeft() + promenadeWidth() * playerSweepLo;
+    var PH = promenadeLeft() + promenadeWidth() * playerSweepHi;
+    var gap = Math.max(0, PL - HH, HL - PH); // interval distance, 0 if overlapping
+    return gap < reach;
+  }
+
+  var DEPTH_BAND = 0.6; // metres either side of the avatar counted as level
+
+  // Level with the avatar this frame: inside the depth band, OR the point
+  // crossed the avatar's plane since last frame. The crossing test means a
+  // fast closing speed (fast hazard + fast forward walk, or a frame hitch)
+  // can never tunnel a hazard straight through the player between frames.
+  function depthLevel(eff, prevEff) {
+    return Math.abs(eff) < DEPTH_BAND || (eff <= 0) !== (prevEff <= 0);
+  }
+
   function triggerStumble(cfg) {
     invulnUntil = frameNow + STUMBLE_INVULN_MS;
     shakeUntil = frameNow + STUMBLE_SHAKE_MS;
@@ -1057,6 +1142,7 @@
 
       var m = h.worldZ - distance;
       var mA = m - playerM(); // depth relative to where the avatar stands
+      if (h.prevMA === undefined) h.prevMA = mA;
 
       // Cleanup: fully past the player, or drifted off the promenade
       if (m < bottomMetres() - 2 || h.u < -0.05 || h.u > 1.05) {
@@ -1064,30 +1150,35 @@
         continue;
       }
 
-      // Collisions, checked at the avatar's actual depth
+      // Collisions, checked at the avatar's actual depth (swept so nothing
+      // tunnels through, and groups collide as one solid footprint)
       if (cfg.ground) {
         if (!h.hit && frameNow >= skidUntil &&
-            Math.abs(mA) < 1.0 && overlapsPlayer(h.u, cfg.width)) {
+            depthLevel(mA, h.prevMA) && overlapsPlayer(h.u, cfg.width)) {
           triggerSkid(h);
         }
       } else if (!h.harmless) {
         var collided = false;
         if (h.members) {
+          var levelNow = false, lo = Infinity, hi = -Infinity;
           for (var j = 0; j < h.members.length; j++) {
             var mem = h.members[j];
-            if (Math.abs(mA + mem.dz) < 0.6 &&
-                overlapsPlayer(h.u + mem.du, cfg.width)) {
-              collided = true;
-              break;
-            }
+            if (depthLevel(mA + mem.dz, h.prevMA + mem.dz)) levelNow = true;
+            var mu = h.u + mem.du;
+            if (mu < lo) lo = mu;
+            if (mu > hi) hi = mu;
           }
-        } else if (Math.abs(mA) < 0.6 &&
-                   overlapsPlayer(h.u, cfg.width *
-                     (h.variant === 'roseSeller' || h.variant === 'lookyMan'
-                       ? 1.6 : 1))) {
-          // Vendors get a friendlier catch radius — walking roughly into
-          // them should reliably collect, they're rewards not hazards
-          collided = true;
+          // While any of the group is level with us, the whole group span
+          // is the obstacle — matches the blob you see, not phantom gaps
+          if (levelNow && hitsPlayer(lo, hi, cfg.width)) {
+            collided = true;
+          }
+        } else {
+          var mult = (h.variant === 'roseSeller' || h.variant === 'lookyMan')
+            ? 1.6 : 1; // vendors get a friendlier catch radius
+          if (depthLevel(mA, h.prevMA) && hitsPlayer(h.u, h.u, cfg.width * mult)) {
+            collided = true;
+          }
         }
 
         if (collided) {
@@ -1105,6 +1196,7 @@
       }
 
       checkPassed(h, mA);
+      h.prevMA = mA;
     }
 
     // Fixed scenery collides like any stationary hazard: a stumble
@@ -1114,7 +1206,7 @@
         var it = items[si];
         var sm = it.worldZ - distance - playerM();
         if (Math.abs(sm) < 0.7 &&
-            overlapsPlayer(it.u, it.cfg.width * it.cfg.hit)) {
+            hitsPlayer(it.u, it.u, it.cfg.width * it.cfg.hit)) {
           triggerStumble(it.cfg);
           break;
         }
@@ -1603,9 +1695,10 @@
     ctx.ellipse(x, y + bodyH * 0.55, bodyW * 0.75, bodyW * 0.3, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Body — rounded rectangle, flickering white during a stumble
+    // Body — rounded rectangle in the lead character's colour, flickering
+    // white during a stumble
     var flashing = time < flashUntil && Math.floor(time / 70) % 2 === 0;
-    ctx.fillStyle = flashing ? '#ffffff' : '#e63946';
+    ctx.fillStyle = flashing ? '#ffffff' : leadColour();
     roundRect(x - bodyW / 2, y - bodyH / 2 + bob, bodyW, bodyH, bodyW * 0.35);
     ctx.fill();
 
@@ -2290,7 +2383,7 @@
       return;
     }
 
-    ctx.fillStyle = isPlayer ? '#e63946' : (colour || 'rgba(255, 255, 255, 0.10)');
+    ctx.fillStyle = colour || 'rgba(255, 255, 255, 0.10)';
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
@@ -2348,7 +2441,7 @@
     var cx = areaStart + (W - stickReserve) / 2;
     var cy = gb + FOOTER_H / 2;
 
-    drawAvatar(cx - 56, cy, 22, true, null, false); // the player, larger
+    drawAvatar(cx - 56, cy, 22, true, leadColour(), false); // the player, larger
     for (var i = 0; i < squad.length; i++) {
       drawAvatar(cx + i * 34, cy, 12, false, squad[i].colour, squad[i].lost);
     }
@@ -2362,6 +2455,14 @@
     lastTime = time;
     frameNow = time;
 
+    // Move the player first and record the horizontal span they covered
+    // this frame, so hazard collisions can swept-test against that span
+    // (a fast dodge on a frame hitch can't tunnel through).
+    var u0 = playerU;
+    updatePlayer(dt);
+    playerSweepLo = Math.min(u0, playerU);
+    playerSweepHi = Math.max(u0, playerU);
+
     if (state === STATE_WALKING && !paused) {
       // walkRate() goes negative when the avatar pulls back down the band
       distance = Math.max(0, Math.min(chipShopZ(), distance + walkRate() * dt));
@@ -2371,8 +2472,6 @@
       updateSelfieSpots();
       checkFinish();
     }
-
-    updatePlayer(dt);
 
     // Screen shake after a stumble or tumble — tumbles jolt much harder
     var shaking = time < shakeUntil;
