@@ -138,10 +138,45 @@
       color: #ffffff;
     }
 
+    .prompt.small {
+      font-size: clamp(11px, 3vw, 14px);
+      margin-top: 34px;
+      animation: none;
+      color: #8fb4d9;
+    }
+
+    .mate-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .mate {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(11px, 3vw, 13px);
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: #8fb4d9;
+      background: transparent;
+      border: 2px solid rgba(143, 180, 217, 0.5);
+      border-radius: 20px;
+      padding: 9px 14px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .mate.on {
+      color: #0a1628;
+      background: #ffd166;
+      border-color: #ffd166;
+    }
+
     .hand-row {
       display: flex;
       gap: 16px;
-      margin-top: 28px;
+      margin-top: 16px;
     }
 
     .hand-row .btn {
@@ -169,7 +204,15 @@
   <div id="start-screen" class="overlay">
     <div class="title">DEATH MARCH</div>
     <div class="subtitle">Tiki Beach to Daytona</div>
-    <div class="prompt">CHOOSE YOUR THUMB</div>
+    <div class="prompt">PICK YOUR SQUAD</div>
+    <div class="mate-row">
+      <button class="mate on" id="mate-you" disabled>YOU</button>
+      <button class="mate" id="mate-adam">ADAM</button>
+      <button class="mate" id="mate-lee">LEE</button>
+      <button class="mate" id="mate-robby">ROBBY</button>
+      <button class="mate" id="mate-steve">STEVE</button>
+    </div>
+    <div class="prompt small">CHOOSE YOUR THUMB</div>
     <div class="hand-row">
       <button class="btn" id="hand-left">LEFTY</button>
       <button class="btn" id="hand-right">RIGHTY</button>
@@ -177,8 +220,9 @@
   </div>
 
   <div id="end-screen" class="overlay hidden">
-    <div class="title">YOU MADE IT<br>TO DAYTONA</div>
+    <div class="title" id="end-title">YOU MADE IT<br>TO DAYTONA</div>
     <div class="end-time" id="end-time">0.0s</div>
+    <div class="subtitle" id="end-score"></div>
     <button class="btn" id="walk-again">WALK AGAIN</button>
   </div>
 

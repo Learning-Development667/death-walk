@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.10.1';
+  var VERSION = '0.11.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -164,16 +164,76 @@
   // Collision effect timers (rAF-clock ms) and skid state
   var invulnUntil = 0;       // no repeat hits while this is in the future
   var shakeUntil = 0;        // screen shake window after a stumble
+  var shakeAmp = 6;          // shake violence: stumbles rattle, tumbles jolt
   var flashUntil = 0;        // player flash window after a stumble
   var skidUntil = 0;         // control lost while sliding on puke
   var skidVel = 0;           // sideways slip, promenade-widths per second
 
   // ---------------------------------------------------------------------
-  // TEMP character flags — stand-ins for Phase 4's real character
-  // selection system. Flip by hand for testing until that lands.
+  // Tiki Tumble — pushing over the sea-wall lip drops you ~2ft onto the
+  // beach. It stings (heavy time penalty, hard jolt) but never ends the
+  // run: the player clambers back onto the promenade.
   // ---------------------------------------------------------------------
-  var SQUAD_HAS_ADAM = false;  // TEMP: Adam in the squad (Phase 4)
-  var PLAYING_AS_LEE = false;  // TEMP: playing as Lee (Phase 4)
+  var TUMBLE_MS = 900;         // how long the fall + clamber takes
+  var TUMBLE_PENALTY = 5;      // seconds added to the run clock
+  var TUMBLE_PRESS_S = 0.35;   // how long to push into the edge to go over
+  var tumbleUntil = 0;
+  var tumbleCount = 0;         // tumbles this run ("survived" = finish after)
+  var wallPressT = 0;
+
+  function triggerTumble() {
+    wallPressT = 0;
+    tumbleCount += 1;
+    tumbleUntil = frameNow + TUMBLE_MS;
+    invulnUntil = frameNow + TUMBLE_MS + 1200;
+    shakeUntil = frameNow + 750;
+    shakeAmp = 14; // a real drop, not a soft landing
+    flashUntil = frameNow + TUMBLE_MS;
+    elapsed += TUMBLE_PENALTY;
+    streak = 0;
+    // Recover a step in from the edge (the fall animation plays over it)
+    playerU = 0.07;
+    targetU = 0.07;
+    notify('TIKI TUMBLE! +' + TUMBLE_PENALTY + 's', 3200);
+  }
+
+  // ---------------------------------------------------------------------
+  // Squad composition — set by the start screen's character selection.
+  // The flags below are now driven by the actual selection rather than
+  // hardcoded. (Full Firefly avatars and a proper "playing as" picker
+  // come in Phase 4; until then, Lee in the squad = Lee flavour.)
+  // ---------------------------------------------------------------------
+  var SQUAD_HAS_ADAM = false;  // true when Adam is picked into the squad
+  var PLAYING_AS_LEE = false;  // true when Lee is picked into the squad
+
+  var MATE_ROSTER = {
+    adam:  { name: 'Adam',  colour: '#4d96ff' },
+    lee:   { name: 'Lee',   colour: '#7fd069' },
+    robby: { name: 'Robby', colour: '#f77f00' },
+    steve: { name: 'Steve', colour: '#25ced1' },
+  };
+
+  var mateSel = { adam: false, lee: false, robby: false, steve: false };
+  var squad = [];              // this run's mates: {key, name, colour, lost}
+  var SQUAD_WIDTH_PER_MATE = 0.30; // extra collision width per linked mate
+
+  function matesAlive() {
+    var n = 0;
+    for (var i = 0; i < squad.length; i++) if (!squad[i].lost) n++;
+    return n;
+  }
+
+  // A mate takes the hit and retires to a bench; the group narrows.
+  // The last remaining walker is never removed — solo stumbles only.
+  function loseMate() {
+    for (var i = squad.length - 1; i >= 0; i--) {
+      if (!squad[i].lost) {
+        squad[i].lost = true;
+        notify(squad[i].name + ' sits this one out on a bench');
+        return;
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------
   // Score, streaks, and carried items
@@ -206,9 +266,9 @@
   var noticeText = '';
   var noticeUntil = 0;
 
-  function notify(text) {
+  function notify(text, ms) {
     noticeText = text;
-    noticeUntil = frameNow + 2600;
+    noticeUntil = frameNow + (ms || 2600);
   }
 
   function unlockAchievement(id, label) {
@@ -227,7 +287,9 @@
 
   var startScreen = document.getElementById('start-screen');
   var endScreen = document.getElementById('end-screen');
+  var endTitleEl = document.getElementById('end-title');
   var endTimeEl = document.getElementById('end-time');
+  var endScoreEl = document.getElementById('end-score');
   var versionEl = document.getElementById('version');
   var walkAgainBtn = document.getElementById('walk-again');
 
@@ -238,8 +300,15 @@
     return promenadeLeft() + promenadeWidth() * playerU;
   }
 
-  function playerWidth() {
+  // The player sprite's own body width
+  function playerBodyW() {
     return Math.min(promenadeWidth() * 0.14, 46);
+  }
+
+  // Effective collision width: the whole arm-in-arm group. Wider squads
+  // make every gap tighter; losing mates narrows it back down.
+  function playerWidth() {
+    return playerBodyW() * (1 + SQUAD_WIDTH_PER_MATE * matesAlive());
   }
 
   // ---------------------------------------------------------------------
@@ -303,6 +372,27 @@
     joyId = null;
     joyDX = 0;
     joyDY = 0;
+    tumbleUntil = 0;
+    tumbleCount = 0;
+    wallPressT = 0;
+    shakeAmp = 6;
+
+    // Build this run's squad from the start-screen selection and drive
+    // the character flags from actual composition
+    squad = [];
+    for (var mk in MATE_ROSTER) {
+      if (mateSel[mk]) {
+        squad.push({
+          key: mk,
+          name: MATE_ROSTER[mk].name,
+          colour: MATE_ROSTER[mk].colour,
+          lost: false,
+        });
+      }
+    }
+    SQUAD_HAS_ADAM = !!mateSel.adam;
+    PLAYING_AS_LEE = !!mateSel.lee;
+
     hidePhotoOverlay();
 
     // Pre-populate the corridor so the run starts as busy as it plays:
@@ -323,9 +413,56 @@
     state = STATE_WALKING;
   }
 
-  function finishRun() {
+  // ---------------------------------------------------------------------
+  // The finish — and the chip shop just past it. Walking into Daytona at
+  // 400m ends the run as normal; hugging the building side and pressing
+  // on to the doorway beyond instead buys everyone chips. No hints.
+  // ---------------------------------------------------------------------
+  var CHIP_EXTRA_M = 12;       // the shop sits this far past Daytona
+  var CHIP_LANE_U = 0.78;      // stay right of this to walk on past
+  var CHIP_DOOR_U = 0.9;       // the doorway itself
+  var CHIP_POINTS = 750;
+
+  function chipShopZ() {
+    return RUN_DISTANCE + CHIP_EXTRA_M;
+  }
+
+  function checkFinish() {
+    if (distance < RUN_DISTANCE) return;
+    if (distance >= chipShopZ()) {
+      // Reached the shop's depth: through the door, or shrug and finish
+      finishRun(playerU > CHIP_LANE_U);
+    } else if (playerU <= CHIP_LANE_U) {
+      // Anywhere but the far right at Daytona = the normal finish
+      finishRun(false);
+    }
+    // else: hugging the building side — keep walking past Daytona
+  }
+
+  function finishRun(boughtChips) {
     state = STATE_DONE;
+
+    if (boughtChips) addScore(CHIP_POINTS);
+
+    // Squad payout: bigger starting squads score more, and bringing
+    // every mate home intact is worth celebrating
+    if (squad.length > 0) {
+      score = Math.round(score * (1 + 0.15 * squad.length));
+      if (matesAlive() === squad.length) {
+        score += 250 * squad.length;
+        unlockAchievement('nobodyLeftBehind', 'Nobody Left Behind');
+      }
+    }
+
+    if (tumbleCount > 0) {
+      unlockAchievement('tikiTumbleSurvivor', 'Tiki Tumble Survivor');
+    }
+
+    endTitleEl.innerHTML = boughtChips
+      ? 'BOUGHT EVERYONE<br>CHIPS'
+      : 'YOU MADE IT<br>TO DAYTONA';
     endTimeEl.textContent = elapsed.toFixed(1) + 's';
+    endScoreEl.textContent = score + ' PTS';
     endScreen.classList.remove('hidden');
   }
 
@@ -347,6 +484,9 @@
   function updatePlayer(dt) {
     if (paused) return;
 
+    // Mid-tumble: no control while falling off the ledge
+    if (frameNow < tumbleUntil) return;
+
     // Skidding on puke: the player slips sideways with no control until
     // the skid window ends, then resumes from wherever they ended up.
     if (frameNow < skidUntil) {
@@ -354,6 +494,18 @@
       skidVel *= Math.pow(0.02, dt); // slide dies away quickly
       targetU = playerU;
       return;
+    }
+
+    // Leaning into the sea-wall lip: keep pushing and over you go
+    if (state === STATE_WALKING && playerU < 0.012 &&
+        (joyDX < -0.5 || leftHeld)) {
+      wallPressT += dt;
+      if (wallPressT >= TUMBLE_PRESS_S) {
+        triggerTumble();
+        return;
+      }
+    } else {
+      wallPressT = 0;
     }
 
     // Held arrow keys steer the target at a constant speed
@@ -572,6 +724,19 @@
       e.stopPropagation();
       beginRun('right');
     });
+  }
+
+  // Squad picker chips — toggle mates in and out before starting
+  for (var mateKey in MATE_ROSTER) {
+    (function (mk) {
+      var btn = document.getElementById('mate-' + mk);
+      if (!btn) return;
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        mateSel[mk] = !mateSel[mk];
+        btn.classList.toggle('on', mateSel[mk]);
+      });
+    })(mateKey);
   }
 
   walkAgainBtn.addEventListener('click', function (e) {
@@ -842,9 +1007,14 @@
   function triggerStumble(cfg) {
     invulnUntil = frameNow + STUMBLE_INVULN_MS;
     shakeUntil = frameNow + STUMBLE_SHAKE_MS;
+    shakeAmp = 6;
     flashUntil = frameNow + STUMBLE_FLASH_MS;
     elapsed += cfg.penalty; // time penalty straight onto the run clock
     streak = 0;             // a real collision breaks the dodge streak
+
+    // A significant collision costs the group a mate; the last walker
+    // is never removed — they just stumble like always
+    if (matesAlive() > 0) loseMate();
   }
 
   function triggerSkid(h) {
@@ -967,7 +1137,7 @@
       });
     }
     roses += 1;
-    notify('Got a rose');
+    notify('ROSE COLLECTED — you are carrying a rose', 4200);
   }
 
   // The looky looky men: contact instantly buys their wares — swagger,
@@ -1391,14 +1561,40 @@
     // buildings, and u = 0 stays exactly on the Tiki Tumble edge at
     // every depth
     var x = depthToX(playerScreenX(), dA);
-    var bodyW = playerWidth() * sc;
+    var bodyW = playerBodyW() * sc;
     var bodyH = bodyW * 1.5;
     var headR = bodyW * 0.42;
+
+    // Linked mates flank the player, alternating sides — drawn first so
+    // the player fronts the group. Lost mates simply aren't here.
+    var slot = 0;
+    for (var i = 0; i < squad.length; i++) {
+      if (squad[i].lost) continue;
+      var side = (slot % 2 === 0) ? 1 : -1;
+      var rank = Math.floor(slot / 2) + 1;
+      var mx2 = x + side * rank * bodyW * 0.95;
+      drawFigure(mx2, y, bodyW * 0.72, bodyW * 1.05, squad[i].colour);
+      slot++;
+    }
 
     // Walking bob while moving
     var bob = 0;
     if (state === STATE_WALKING) {
       bob = Math.sin(time / 90) * 2;
+    }
+
+    // Tiki Tumble: the comedy fall — the sprite pitches over the edge,
+    // drops the ledge's height, and clambers back
+    var tumbling = time < tumbleUntil;
+    if (tumbling) {
+      var p = 1 - (tumbleUntil - time) / TUMBLE_MS;
+      var arc = Math.sin(p * Math.PI);
+      ctx.save();
+      ctx.translate(x - arc * bodyW * 1.3, y + arc * dropHeight());
+      ctx.rotate(-arc * 2.2);
+      x = 0;
+      y = 0;
+      bob = 0;
     }
 
     // Shadow
@@ -1419,6 +1615,8 @@
     ctx.beginPath();
     ctx.arc(x, y - bodyH / 2 - headR * 0.7 + bob, headR, 0, Math.PI * 2);
     ctx.fill();
+
+    if (tumbling) ctx.restore();
   }
 
   function roundRect(x, y, w, h, r) {
@@ -1905,9 +2103,35 @@
     ctx.fill();
   }
 
-  // Hazards, scenery, pickups, and selfie spots drawn together,
-  // far-to-near so overlaps stack correctly; split around the player's
-  // depth so passed objects draw over them.
+  // The chip shop doorway past Daytona: warm light spilling out of a
+  // frame on the building side. Present in the world, never explained.
+  function drawChipDoor(it, m) {
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var x = depthToX(promenadeLeft() + promenadeWidth() * it.u, d);
+    var y = depthToY(d);
+    var w = 46 * s;
+    var h2 = w * 1.9;
+
+    ctx.fillStyle = 'rgba(255, 209, 102, 0.25)'; // light on the pavement
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.9, w * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#4a3728'; // door frame
+    ctx.fillRect(x - w * 0.62, y - h2 - w * 0.12, w * 1.24, h2 + w * 0.12);
+    ctx.fillStyle = '#ffd166'; // the glow inside
+    ctx.fillRect(x - w * 0.5, y - h2, w, h2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)'; // steam curls
+    ctx.beginPath();
+    ctx.arc(x - w * 0.15, y - h2 - w * 0.28, w * 0.13, 0, Math.PI * 2);
+    ctx.arc(x + w * 0.18, y - h2 - w * 0.42, w * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Hazards, scenery, pickups, selfie spots, and the chip shop drawn
+  // together, far-to-near so overlaps stack correctly; split around the
+  // player's depth so passed objects draw over them.
   function drawWorldObjects(behindPlayer) {
     var items = sceneryItems();
     var i;
@@ -1918,6 +2142,7 @@
         items.push({ selfie: true, worldZ: SELFIE_SPOTS[i].z, u: SELFIE_SPOTS[i].u });
       }
     }
+    items.push({ chipDoor: true, worldZ: chipShopZ(), u: CHIP_DOOR_U });
     items.sort(function (a, b) { return b.worldZ - a.worldZ; });
 
     for (var j = 0; j < items.length; j++) {
@@ -1927,6 +2152,7 @@
       if (items[j].scenery) drawScenery(items[j], m);
       else if (items[j].pickup) drawPickup(items[j], m);
       else if (items[j].selfie) drawSelfie(items[j], m);
+      else if (items[j].chipDoor) drawChipDoor(items[j], m);
       else drawHazard(items[j], m);
     }
   }
@@ -2006,6 +2232,17 @@
     ctx.fillStyle = streak > 0 ? '#7fd069' : 'rgba(255, 255, 255, 0.45)';
     ctx.fillText('STREAK ' + streak, W - 14, rowMid);
 
+    // Carrying a rose: an unmissable chip in the middle of the row
+    if (roses > 0) {
+      ctx.fillStyle = '#ff4d6d';
+      roundRect(W / 2 - 38, rowMid - 8, 76, 15, 7);
+      ctx.fill();
+      ctx.font = 'bold 10px "DM Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('ROSE' + (roses > 1 ? ' x' + roses : ''), W / 2, rowMid);
+    }
+
     // Transient notice line under the HUD
     if (frameNow < noticeUntil) {
       ctx.font = '13px "DM Sans", sans-serif';
@@ -2039,9 +2276,21 @@
   // One squad avatar with everything the group has bought so far —
   // wares from the looky looky men appear on EVERY avatar, the shared
   // haul being the reward. The player's own avatar is the big one and
-  // also shows the carried rose.
-  function drawAvatar(x, y, r, isPlayer) {
-    ctx.fillStyle = isPlayer ? '#e63946' : 'rgba(255, 255, 255, 0.10)';
+  // also shows the carried rose. Lost mates grey out where they stand.
+  function drawAvatar(x, y, r, isPlayer, colour, lost) {
+    if (lost) {
+      // Benched: dimmed shell, no wares, no colour
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      return;
+    }
+
+    ctx.fillStyle = isPlayer ? '#e63946' : (colour || 'rgba(255, 255, 255, 0.10)');
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
@@ -2092,15 +2341,16 @@
     ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
     ctx.fillRect(0, gb, W, 2);
 
-    // Squad row centred in the space the joystick doesn't use
+    // Squad row centred in the space the joystick doesn't use — the
+    // real roster now, greying out as mates get benched
     var stickReserve = 160;
     var areaStart = joySide === 'left' ? stickReserve : 0;
     var cx = areaStart + (W - stickReserve) / 2;
     var cy = gb + FOOTER_H / 2;
 
-    drawAvatar(cx - 56, cy, 22, true); // the player, noticeably larger
-    for (var i = 0; i < 3; i++) {
-      drawAvatar(cx + i * 34, cy, 12, false);
+    drawAvatar(cx - 56, cy, 22, true, null, false); // the player, larger
+    for (var i = 0; i < squad.length; i++) {
+      drawAvatar(cx + i * 34, cy, 12, false, squad[i].colour, squad[i].lost);
     }
   }
 
@@ -2114,24 +2364,22 @@
 
     if (state === STATE_WALKING && !paused) {
       // walkRate() goes negative when the avatar pulls back down the band
-      distance = Math.max(0, distance + walkRate() * dt);
+      distance = Math.max(0, Math.min(chipShopZ(), distance + walkRate() * dt));
       elapsed += dt;
       updateHazards(dt);
       updatePickups(dt);
       updateSelfieSpots();
-      if (distance >= RUN_DISTANCE) {
-        distance = RUN_DISTANCE;
-        finishRun();
-      }
+      checkFinish();
     }
 
     updatePlayer(dt);
 
-    // Screen shake after a stumble — the whole scene judders briefly
+    // Screen shake after a stumble or tumble — tumbles jolt much harder
     var shaking = time < shakeUntil;
     if (shaking) {
       ctx.save();
-      ctx.translate((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
+      ctx.translate((Math.random() - 0.5) * shakeAmp,
+                    (Math.random() - 0.5) * shakeAmp);
     }
 
     // Sky and side fills share the page background colour
