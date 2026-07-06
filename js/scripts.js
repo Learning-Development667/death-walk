@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.11.1';
+  var VERSION = '0.12.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -386,6 +386,9 @@
     squadItems.hat = false;
     squadItems.chain = false;
     selfieUsed = {};
+    portalooUsed = false;
+    steveUsed = false;
+    cardUntil = 0;
     paused = false;
     noticeUntil = 0;
     roseSellerSpawned = false;
@@ -1415,6 +1418,93 @@
   }
 
   // ---------------------------------------------------------------------
+  // One-off stops — the portaloo on a side street and Steve's Ice Cream
+  // Stop. Both singletons per run, both driven directly by the character
+  // selection state (leadChar + squad), no separate flags.
+  // ---------------------------------------------------------------------
+  var PORTALOO_SOBER = 2.5;      // standard sober-up relief
+  var PORTALOO_SOBER_SKIDZ = 4;  // when Skidz is playing or walking along
+  var STEVE_BOOST = 3;           // full ice cream interlude with Steve there
+  var STEVE_BOOST_SMALL = 1.5;   // quick pass-over without him
+  var PORTALOO_U = 0.93;         // parked right on the kerb at its opening
+  var ICE_SHOP_U = 0.92;
+
+  var portalooUsed = false;
+  var steveUsed = false;
+
+  // The portaloo sits on the side street in window 2 (~150-210m); the
+  // ice cream shop is a doorway in the frontage a couple of blocks
+  // before window 3's opening (~215-260m). Both derive from the same
+  // deterministic road layout, so they're identical every run.
+  function portalooZ() {
+    return (roadStartBlock(2) + 0.5) * BUILDING_METRES;
+  }
+
+  function steveShopZ() {
+    return (roadStartBlock(3) - 2) * BUILDING_METRES + 3;
+  }
+
+  function squadIncludes(key) {
+    if (leadChar === key) return true;
+    for (var i = 0; i < squad.length; i++) {
+      if (squad[i].key === key && !squad[i].lost) return true;
+    }
+    return false;
+  }
+
+  // Non-pausing popup card (the quick ice cream hand-over) — a small
+  // placeholder image panel that shows while play continues
+  var cardText = '';
+  var cardColour = '#25ced1';
+  var cardUntil = 0;
+
+  function flashCard(text, colour, ms) {
+    cardText = text;
+    cardColour = colour;
+    cardUntil = frameNow + (ms || 2400);
+  }
+
+  function updateStops() {
+    if (!portalooUsed) {
+      var mp = portalooZ() - distance - playerM();
+      if (Math.abs(mp) < 1.0 && hitsPlayer(PORTALOO_U, PORTALOO_U, 44)) {
+        portalooUsed = true;
+        if (squadIncludes('skidz')) {
+          drunk = Math.max(0, drunk - PORTALOO_SOBER_SKIDZ);
+          notify(leadChar === 'skidz'
+            ? 'I should shit myself before Daytona now.'
+            : 'Skidz you better use the loo before we go any further.', 3800);
+        } else {
+          drunk = Math.max(0, drunk - PORTALOO_SOBER);
+          notify('Sweet relief — sobering up', 3000);
+        }
+      }
+    }
+
+    if (!steveUsed) {
+      var ms2 = steveShopZ() - distance - playerM();
+      if (Math.abs(ms2) < 1.0 && hitsPlayer(ICE_SHOP_U, ICE_SHOP_U, 52)) {
+        steveUsed = true;
+        if (squadIncludes('steve')) {
+          // Full interlude: the overlay pauses the whole run (timer too)
+          drunk = Math.max(0, drunk - STEVE_BOOST);
+          showPhotoOverlay({
+            caption: "STEVE'S ICE CREAM STOP — Steve, in confident Spanish: " +
+              '"Hola amigo! Dos... no no, DIEZ helados. Por fa-vor!" The ' +
+              'vendor hands over the lot just to end it. Sugar-steadied, ' +
+              'the squad marches on. (comic strip art: Phase 2)',
+            colour: '#25ced1',
+          });
+        } else {
+          // Steve's not with you — he still slides one over the counter
+          drunk = Math.max(0, drunk - STEVE_BOOST_SMALL);
+          flashCard('Steve passes an ice cream over the counter', '#25ced1', 2600);
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // Drawing — placeholder graphics, everything on canvas.
   // The world is drawn back to front: sky, sea and beach on the left,
   // promenade in the middle, buildings on the right, then the player.
@@ -1598,6 +1688,26 @@
     strokeEdge(right, 'rgba(90, 85, 75, 0.35)', 3);
   }
 
+  // ---------------------------------------------------------------------
+  // Side streets — deterministic gaps in the building frontage, one per
+  // ~72m window at an irregular offset within it (same fixed-placement
+  // idea as palms/benches, so every run looks identical).
+  // ---------------------------------------------------------------------
+  var ROAD_EVERY_BLOCKS = 12;  // one opening per this many building blocks
+  var ROAD_WIDTH_BLOCKS = 2;   // openings are two blocks (~12m) wide
+
+  function roadStartBlock(windowIdx) {
+    return windowIdx * ROAD_EVERY_BLOCKS + 1 +
+      Math.floor(rand(windowIdx * 13.7) * (ROAD_EVERY_BLOCKS - ROAD_WIDTH_BLOCKS - 2));
+  }
+
+  function isRoadBlock(b) {
+    if (b < 0) return false;
+    var w = Math.floor(b / ROAD_EVERY_BLOCKS);
+    var start = roadStartBlock(w);
+    return b >= start && b < start + ROAD_WIDTH_BLOCKS;
+  }
+
   function drawBuildings() {
     var right = promenadeLeft() + promenadeWidth();
     var outer = right + buildingWidth();
@@ -1618,6 +1728,38 @@
       var xL = depthToX(right + inset, d);
       var xR = depthToX(outer - 2, d);
       var hgt = (H * 0.22 + rand(b + 57) * H * 0.1) * s;
+
+      if (isRoadBlock(b)) {
+        // A side street: tarmac running off to the right instead of a
+        // facade — only drawn on the opening's near block so the two-
+        // block gap reads as one road
+        if (!isRoadBlock(b - 1)) {
+          var mFar = Math.max((b + ROAD_WIDTH_BLOCKS) * BUILDING_METRES - distance, mBottom);
+          var dFar = depthOf(mFar);
+          var yFar = depthToY(dFar);
+          var xNear = depthToX(right, d);
+          var xFar = depthToX(right, dFar);
+          ctx.fillStyle = '#2f3542';
+          ctx.beginPath();
+          ctx.moveTo(xNear, y);
+          ctx.lineTo(W + 12, y);
+          ctx.lineTo(W + 12, yFar);
+          ctx.lineTo(xFar, yFar);
+          ctx.closePath();
+          ctx.fill();
+          // faded centre line heading away down the street
+          var yMid = (y + yFar) / 2;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+          ctx.lineWidth = Math.max(1, 2 * s);
+          ctx.setLineDash([6 * s, 6 * s]);
+          ctx.beginPath();
+          ctx.moveTo((xNear + xFar) / 2, yMid);
+          ctx.lineTo(W + 12, yMid);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        continue; // no facade on road blocks
+      }
 
       ctx.fillStyle = (b % 2 === 0) ? '#12233d' : '#152a47';
       ctx.fillRect(xL, y - hgt, xR - xL, hgt);
@@ -2222,9 +2364,69 @@
     ctx.fill();
   }
 
-  // Hazards, scenery, pickups, selfie spots, and the chip shop drawn
-  // together, far-to-near so overlaps stack correctly; split around the
-  // player's depth so passed objects draw over them.
+  // The portaloo: a blue plastic box parked on its side street
+  function drawPortaloo(it, m) {
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var x = depthToX(promenadeLeft() + promenadeWidth() * it.u, d);
+    var y = depthToY(d);
+    var w = 40 * s;
+    var h2 = w * 1.7;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.6, w * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#2d7dd2'; // the cabin
+    roundRect(x - w / 2, y - h2, w, h2, w * 0.08);
+    ctx.fill();
+    ctx.fillStyle = '#1d5fa8'; // roof cap
+    ctx.fillRect(x - w * 0.56, y - h2 - w * 0.14, w * 1.12, w * 0.18);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)'; // door outline + vents
+    ctx.lineWidth = Math.max(1, w * 0.05);
+    ctx.strokeRect(x - w * 0.32, y - h2 * 0.88, w * 0.64, h2 * 0.82);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x + w * 0.2, y - h2 * 0.45, w * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Steve's Ice Cream Stop: a cream-lit doorway with a cone on the sign
+  function drawIceShop(it, m) {
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var x = depthToX(promenadeLeft() + promenadeWidth() * it.u, d);
+    var y = depthToY(d);
+    var w = 48 * s;
+    var h2 = w * 1.8;
+
+    ctx.fillStyle = 'rgba(255, 214, 232, 0.25)'; // light on the pavement
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.9, w * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#8a4a5e'; // frame
+    ctx.fillRect(x - w * 0.62, y - h2 - w * 0.12, w * 1.24, h2 + w * 0.12);
+    ctx.fillStyle = '#ffe3ec'; // the glow inside
+    ctx.fillRect(x - w * 0.5, y - h2, w, h2);
+    // the cone on the sign
+    ctx.fillStyle = '#e0a458';
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.14, y - h2 - w * 0.16);
+    ctx.lineTo(x + w * 0.14, y - h2 - w * 0.16);
+    ctx.lineTo(x, y - h2 - w * 0.55);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ff8fab';
+    ctx.beginPath();
+    ctx.arc(x, y - h2 - w * 0.16, w * 0.16, Math.PI, 0);
+    ctx.fill();
+  }
+
+  // Hazards, scenery, pickups, selfie spots, the stops, and the chip
+  // shop drawn together, far-to-near so overlaps stack correctly; split
+  // around the player's depth so passed objects draw over them.
   function drawWorldObjects(behindPlayer) {
     var items = sceneryItems();
     var i;
@@ -2236,6 +2438,8 @@
       }
     }
     items.push({ chipDoor: true, worldZ: chipShopZ(), u: CHIP_DOOR_U });
+    items.push({ loo: true, worldZ: portalooZ(), u: PORTALOO_U });
+    items.push({ ice: true, worldZ: steveShopZ(), u: ICE_SHOP_U });
     items.sort(function (a, b) { return b.worldZ - a.worldZ; });
 
     for (var j = 0; j < items.length; j++) {
@@ -2246,6 +2450,8 @@
       else if (items[j].pickup) drawPickup(items[j], m);
       else if (items[j].selfie) drawSelfie(items[j], m);
       else if (items[j].chipDoor) drawChipDoor(items[j], m);
+      else if (items[j].loo) drawPortaloo(items[j], m);
+      else if (items[j].ice) drawIceShop(items[j], m);
       else drawHazard(items[j], m);
     }
   }
@@ -2342,6 +2548,36 @@
       ctx.textAlign = 'center';
       ctx.fillStyle = '#ffd166';
       ctx.fillText(noticeText, W / 2, top + stripH + rowH + 14);
+    }
+
+    // Non-pausing popup card: a small placeholder image panel (the quick
+    // ice cream hand-over) shown while play continues
+    if (frameNow < cardUntil) {
+      var cw = Math.min(W * 0.72, 300);
+      var chh = 66;
+      var cx2 = W / 2 - cw / 2;
+      var cy2 = top + stripH + rowH + 26;
+      ctx.fillStyle = 'rgba(10, 22, 40, 0.9)';
+      roundRect(cx2, cy2, cw, chh, 10);
+      ctx.fill();
+      ctx.fillStyle = cardColour; // placeholder image block
+      roundRect(cx2 + 8, cy2 + 8, 50, chh - 16, 6);
+      ctx.fill();
+      ctx.font = '12px "DM Sans", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffffff';
+      // crude two-line wrap for the caption
+      var words = cardText.split(' ');
+      var line1 = '', line2 = '';
+      for (var wi = 0; wi < words.length; wi++) {
+        if (ctx.measureText(line1 + words[wi]).width < cw - 78 && !line2) {
+          line1 += words[wi] + ' ';
+        } else {
+          line2 += words[wi] + ' ';
+        }
+      }
+      ctx.fillText(line1.trim(), cx2 + 68, cy2 + 26);
+      ctx.fillText(line2.trim(), cx2 + 68, cy2 + 44);
     }
   }
 
@@ -2470,6 +2706,7 @@
       updateHazards(dt);
       updatePickups(dt);
       updateSelfieSpots();
+      updateStops();
       checkFinish();
     }
 
