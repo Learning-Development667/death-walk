@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.12.0';
+  var VERSION = '0.13.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -289,10 +289,13 @@
     noticeUntil = frameNow + (ms || 2600);
   }
 
-  function unlockAchievement(id, label) {
+  // `important` routes the unlock through the pause overlay — used for
+  // the secret story-beat achievements; ordinary ones stay ambient.
+  function unlockAchievement(id, label, important) {
     if (achievements[id]) return;
     achievements[id] = true;
-    notify('ACHIEVEMENT: ' + label);
+    if (important) showMessage('ACHIEVEMENT UNLOCKED: ' + label);
+    else notify('ACHIEVEMENT: ' + label);
   }
 
   function scoreMult() {
@@ -306,6 +309,7 @@
   var startScreen = document.getElementById('start-screen');
   var endScreen = document.getElementById('end-screen');
   var endTitleEl = document.getElementById('end-title');
+  var endMsgEl = document.getElementById('end-msg');
   var endTimeEl = document.getElementById('end-time');
   var endScoreEl = document.getElementById('end-score');
   var versionEl = document.getElementById('version');
@@ -388,7 +392,10 @@
     selfieUsed = {};
     portalooUsed = false;
     steveUsed = false;
-    cardUntil = 0;
+    skidzSoiled = false;
+    msgQueue.length = 0;
+    msgOpen = false;
+    if (msgOverlay) msgOverlay.classList.add('hidden');
     paused = false;
     noticeUntil = 0;
     roseSellerSpawned = false;
@@ -446,36 +453,42 @@
   // on to the doorway beyond instead buys everyone chips. No hints.
   // ---------------------------------------------------------------------
   var CHIP_EXTRA_M = 12;       // the shop sits this far past Daytona
-  var CHIP_LANE_U = 0.78;      // stay right of this to walk on past
-  var CHIP_DOOR_U = 0.9;       // the doorway itself
+  var CHIP_LANE_U = 0.78;      // stay right of this to walk on past Daytona
+  var CHIP_DOOR_U = 0.9;       // where the doorway is drawn
+  var CHIP_DOOR_MIN_U = 0.82;  // and how far right you must be to enter it
   var CHIP_POINTS = 750;
+  var OLD_TOWN_MSG =
+    'Uh oh, you have ended up in old town and missed the Daytona party.';
 
   function chipShopZ() {
     return RUN_DISTANCE + CHIP_EXTRA_M;
   }
 
+  // Three outcomes: into Daytona at the line = the normal finish; ride
+  // the building side past it and through the chip shop door = the
+  // secret ending; sail past both without entering either = lost in
+  // old town.
   function checkFinish() {
     if (distance < RUN_DISTANCE) return;
     if (distance >= chipShopZ()) {
-      // Reached the shop's depth: through the door, or shrug and finish
-      finishRun(playerU > CHIP_LANE_U);
+      finishRun(playerU >= CHIP_DOOR_MIN_U ? 'chips' : 'oldtown');
     } else if (playerU <= CHIP_LANE_U) {
-      // Anywhere but the far right at Daytona = the normal finish
-      finishRun(false);
+      finishRun('daytona');
     }
     // else: hugging the building side — keep walking past Daytona
   }
 
-  function finishRun(boughtChips) {
+  function finishRun(ending) {
     state = STATE_DONE;
 
-    if (boughtChips) addScore(CHIP_POINTS);
+    if (ending === 'chips') addScore(CHIP_POINTS);
 
     // Squad payout: bigger starting squads score more, and bringing
-    // every mate home intact is worth celebrating
+    // every mate home intact is worth celebrating — no such glory if
+    // you led the whole squad into old town
     if (squad.length > 0) {
       score = Math.round(score * (1 + 0.15 * squad.length));
-      if (matesAlive() === squad.length) {
+      if (ending !== 'oldtown' && matesAlive() === squad.length) {
         score += 250 * squad.length;
         unlockAchievement('nobodyLeftBehind', 'Nobody Left Behind');
       }
@@ -485,9 +498,10 @@
       unlockAchievement('tikiTumbleSurvivor', 'Tiki Tumble Survivor');
     }
 
-    endTitleEl.innerHTML = boughtChips
+    endTitleEl.innerHTML = ending === 'chips'
       ? 'BOUGHT EVERYONE<br>CHIPS'
-      : 'YOU MADE IT<br>TO DAYTONA';
+      : (ending === 'oldtown' ? 'OLD TOWN' : 'YOU MADE IT<br>TO DAYTONA');
+    endMsgEl.textContent = ending === 'oldtown' ? OLD_TOWN_MSG : '';
     endTimeEl.textContent = elapsed.toFixed(1) + 's';
     endScoreEl.textContent = score + ' PTS';
     endScreen.classList.remove('hidden');
@@ -1129,7 +1143,12 @@
       h.age += dt;
       h.worldZ -= cfg.speed * dt;
 
-      if (h.wanderAmp) {
+      if (skidzSoiled && !cfg.ground && !h.harmless) {
+        // Everyone can smell it: hazards abandon their own patterns and
+        // home in on the player for the rest of the run
+        var pull = playerU - h.u;
+        h.u += Math.max(-1, Math.min(1, pull * 6)) * HOMING_RATE * dt;
+      } else if (h.wanderAmp) {
         h.u = h.u0 + h.wanderAmp * Math.sin(h.phase + h.wanderOmega * h.age);
       } else if (cfg.lurch) {
         // Erratic: lurch onto a new random heading every so often
@@ -1248,7 +1267,7 @@
     else unlockAchievement('chainReaction', 'Chain Reaction');
     if (squadItems.shades && squadItems.hat && squadItems.chain) {
       // SECRET: the full set in a single run
-      unlockAchievement('tatTrifecta', 'Tat Trifecta');
+      unlockAchievement('tatTrifecta', 'Tat Trifecta', true);
     }
     notify('Looky looky! +' + LOOKY_POINTS);
   }
@@ -1268,8 +1287,8 @@
       // TEMP Adam flavour until Phase 4 character select: invincibility
       // replaces the points bonus for any positive hen contact
       invulnUntil = frameNow + ADAM_INVULN_MS;
-      notify('The shark has fed, all the little fish are happy');
-      if (delivered) unlockAchievement('bridesBouquet', "Bride's Bouquet");
+      showMessage('The shark has fed, all the little fish are happy');
+      if (delivered) unlockAchievement('bridesBouquet', "Bride's Bouquet", true);
       return;
     }
 
@@ -1283,7 +1302,7 @@
                  '+' + BRIDE_POINTS,
         colour: '#d81159', // placeholder — comic strip art comes later
       });
-      unlockAchievement('bridesBouquet', "Bride's Bouquet");
+      unlockAchievement('bridesBouquet', "Bride's Bouquet", true);
       return;
     }
 
@@ -1297,7 +1316,7 @@
     h.harmless = true;
     h.ladsHaveRoses = true;
     roses -= 1;
-    unlockAchievement('sharingTheLove', 'Sharing the Love');
+    unlockAchievement('sharingTheLove', 'Sharing the Love', true);
   }
 
   // ---------------------------------------------------------------------
@@ -1398,11 +1417,54 @@
 
   function hidePhotoOverlay() {
     if (photoOverlay) photoOverlay.classList.add('hidden');
-    paused = false;
+    // Any queued story messages take over the pause; otherwise resume
+    if (msgQueue.length) pumpMessages();
+    else paused = false;
   }
 
   if (photoOverlay) {
     photoOverlay.addEventListener('click', hidePhotoOverlay);
+  }
+
+  // ---------------------------------------------------------------------
+  // Important-message overlay — the single reusable pause system for
+  // narrative/story-beat messages (portaloo, ice cream stop, the shark,
+  // secret achievement unlocks). The game pauses, a centred card shows,
+  // tap dismisses and resumes. Messages queue so back-to-back beats
+  // (e.g. a bonus plus its achievement) play one after another.
+  // Lightweight ambient feedback (rose pill, points, close shaves)
+  // stays on the non-pausing HUD notify() path.
+  // ---------------------------------------------------------------------
+  var msgOverlay = document.getElementById('msg-overlay');
+  var msgCard = document.getElementById('msg-card');
+  var msgQueue = [];
+  var msgOpen = false;
+
+  function showMessage(text) {
+    msgQueue.push(text);
+    pumpMessages();
+  }
+
+  function pumpMessages() {
+    if (msgOpen || !msgOverlay || !msgQueue.length) return;
+    if (photoOverlay && !photoOverlay.classList.contains('hidden')) return;
+    msgCard.textContent = msgQueue.shift();
+    msgOverlay.classList.remove('hidden');
+    msgOpen = true;
+    paused = true;
+  }
+
+  function hideMsgOverlay() {
+    if (msgOverlay) msgOverlay.classList.add('hidden');
+    msgOpen = false;
+    if (msgQueue.length) pumpMessages();
+    else if (!photoOverlay || photoOverlay.classList.contains('hidden')) {
+      paused = false;
+    }
+  }
+
+  if (msgOverlay) {
+    msgOverlay.addEventListener('click', hideMsgOverlay);
   }
 
   function updateSelfieSpots() {
@@ -1452,32 +1514,35 @@
     return false;
   }
 
-  // Non-pausing popup card (the quick ice cream hand-over) — a small
-  // placeholder image panel that shows while play continues
-  var cardText = '';
-  var cardColour = '#25ced1';
-  var cardUntil = 0;
-
-  function flashCard(text, colour, ms) {
-    cardText = text;
-    cardColour = colour;
-    cardUntil = frameNow + (ms || 2400);
-  }
+  // Skidz and the portaloo: use it and the accident is averted; pass it
+  // by with him along and he goes for the rest of the run — and every
+  // hazard on the promenade homes in on the smell.
+  var skidzSoiled = false;
+  var HOMING_RATE = 0.22; // widths/sec hazards close on the player when soiled
 
   function updateStops() {
     if (!portalooUsed) {
       var mp = portalooZ() - distance - playerM();
-      if (Math.abs(mp) < 1.0 && hitsPlayer(PORTALOO_U, PORTALOO_U, 44)) {
+      // (no doubling back once the damage is done)
+      if (!skidzSoiled && Math.abs(mp) < 1.0 &&
+          hitsPlayer(PORTALOO_U, PORTALOO_U, 44)) {
         portalooUsed = true;
         if (squadIncludes('skidz')) {
           drunk = Math.max(0, drunk - PORTALOO_SOBER_SKIDZ);
-          notify(leadChar === 'skidz'
-            ? 'I should shit myself before Daytona now.'
-            : 'Skidz you better use the loo before we go any further.', 3800);
+          showMessage(leadChar === 'skidz'
+            ? "I shouldn't shit myself before Daytona now."
+            : 'Skidz you better use the loo before we go any further.');
+          unlockAchievement('closeCall', 'Close Call', true);
         } else {
           drunk = Math.max(0, drunk - PORTALOO_SOBER);
-          notify('Sweet relief — sobering up', 3000);
+          showMessage('Sweet relief — sobering up.');
         }
+      } else if (!skidzSoiled && squadIncludes('skidz') &&
+                 distance - playerM() > portalooZ() + 2) {
+        // Walked straight past it with Skidz along — too late now
+        skidzSoiled = true;
+        showMessage('Skidz couldn’t hold it. He’s gone and shit ' +
+          'himself. The squad edges away… “You dirty bastard.”');
       }
     }
 
@@ -1485,20 +1550,19 @@
       var ms2 = steveShopZ() - distance - playerM();
       if (Math.abs(ms2) < 1.0 && hitsPlayer(ICE_SHOP_U, ICE_SHOP_U, 52)) {
         steveUsed = true;
+        // Both variants pause via the message overlay (comic strip art
+        // replaces the present-variant card in Phase 2)
         if (squadIncludes('steve')) {
-          // Full interlude: the overlay pauses the whole run (timer too)
           drunk = Math.max(0, drunk - STEVE_BOOST);
-          showPhotoOverlay({
-            caption: "STEVE'S ICE CREAM STOP — Steve, in confident Spanish: " +
-              '"Hola amigo! Dos... no no, DIEZ helados. Por fa-vor!" The ' +
-              'vendor hands over the lot just to end it. Sugar-steadied, ' +
-              'the squad marches on. (comic strip art: Phase 2)',
-            colour: '#25ced1',
-          });
+          showMessage("STEVE'S ICE CREAM STOP — Steve, in confident " +
+            'Spanish: “Hola amigo! Dos… no no, DIEZ helados. Por ' +
+            'fa-vor!” The vendor hands over the lot just to end it. ' +
+            'Sugar-steadied, the squad marches on.');
         } else {
           // Steve's not with you — he still slides one over the counter
           drunk = Math.max(0, drunk - STEVE_BOOST_SMALL);
-          flashCard('Steve passes an ice cream over the counter', '#25ced1', 2600);
+          showMessage('Steve leans out and passes an ice cream over ' +
+            'the counter. Have that one on him.');
         }
       }
     }
@@ -2550,35 +2614,6 @@
       ctx.fillText(noticeText, W / 2, top + stripH + rowH + 14);
     }
 
-    // Non-pausing popup card: a small placeholder image panel (the quick
-    // ice cream hand-over) shown while play continues
-    if (frameNow < cardUntil) {
-      var cw = Math.min(W * 0.72, 300);
-      var chh = 66;
-      var cx2 = W / 2 - cw / 2;
-      var cy2 = top + stripH + rowH + 26;
-      ctx.fillStyle = 'rgba(10, 22, 40, 0.9)';
-      roundRect(cx2, cy2, cw, chh, 10);
-      ctx.fill();
-      ctx.fillStyle = cardColour; // placeholder image block
-      roundRect(cx2 + 8, cy2 + 8, 50, chh - 16, 6);
-      ctx.fill();
-      ctx.font = '12px "DM Sans", sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillStyle = '#ffffff';
-      // crude two-line wrap for the caption
-      var words = cardText.split(' ');
-      var line1 = '', line2 = '';
-      for (var wi = 0; wi < words.length; wi++) {
-        if (ctx.measureText(line1 + words[wi]).width < cw - 78 && !line2) {
-          line1 += words[wi] + ' ';
-        } else {
-          line2 += words[wi] + ' ';
-        }
-      }
-      ctx.fillText(line1.trim(), cx2 + 68, cy2 + 26);
-      ctx.fillText(line2.trim(), cx2 + 68, cy2 + 44);
-    }
   }
 
   // The joystick: translucent base ring plus a nub that tracks the thumb

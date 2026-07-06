@@ -120,6 +120,19 @@
       transform: scale(0.96);
     }
 
+    .msg-card {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(15px, 4.2vw, 19px);
+      line-height: 1.45;
+      color: #ffffff;
+      background: rgba(10, 22, 40, 0.95);
+      border: 2px solid #ffd166;
+      border-radius: 12px;
+      padding: 22px 24px;
+      max-width: 82vw;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+    }
+
     .photo-frame {
       width: 78vw;
       max-width: 420px;
@@ -238,9 +251,15 @@
 
   <div id="end-screen" class="overlay hidden">
     <div class="title" id="end-title">YOU MADE IT<br>TO DAYTONA</div>
+    <div class="subtitle" id="end-msg"></div>
     <div class="end-time" id="end-time">0.0s</div>
     <div class="subtitle" id="end-score"></div>
     <button class="btn" id="walk-again">WALK AGAIN</button>
+  </div>
+
+  <div id="msg-overlay" class="overlay hidden">
+    <div class="msg-card" id="msg-card"></div>
+    <div class="prompt">TAP TO CONTINUE</div>
   </div>
 
   <div id="photo-overlay" class="overlay hidden">
