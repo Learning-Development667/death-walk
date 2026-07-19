@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.34.0';
+  var VERSION = '0.35.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -373,9 +373,11 @@
       desc: 'Bag some gold bling from a chain seller.', secret: false,
       image: 'images/achievements/looky-chains.png' },
     { id: 'nobodyLeftBehind', name: 'Nobody Left Behind',
-      desc: 'Reach the finish with your whole squad still standing.', secret: false },
+      desc: 'Reach the finish with your whole squad still standing.', secret: false,
+      image: 'images/achievements/nobody-left-behind.png' },
     { id: 'tikiTumbleSurvivor', name: 'Tiki Tumble Survivor',
-      desc: 'Take a Tiki Tumble and still make it to the end.', secret: false },
+      desc: 'Take a Tiki Tumble and still make it to the end.', secret: false,
+      image: 'images/achievements/tiki-tumble.png' },
     { id: 'philFirstToBar', name: "No way! Phil's first to the bar",
       desc: 'Playing as Phil, reach Daytona by the proper finish.', secret: true,
       image: 'images/achievements/phil-bar.png' },
@@ -735,12 +737,12 @@
       if (ending !== 'oldtown' && ending !== 'endless' &&
           matesAlive() === squad.length) {
         score += 250 * squad.length;
-        unlockAchievement('nobodyLeftBehind', 'Nobody Left Behind');
+        unlockWithImage('nobodyLeftBehind', 'Nobody Left Behind');
       }
     }
 
     if (tumbleCount > 0) {
-      unlockAchievement('tikiTumbleSurvivor', 'Tiki Tumble Survivor');
+      unlockWithImage('tikiTumbleSurvivor', 'Tiki Tumble Survivor');
     }
 
     endTitleEl.innerHTML =
