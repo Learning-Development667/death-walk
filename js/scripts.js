@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.17.0';
+  var VERSION = '0.18.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -904,71 +904,130 @@
   }
   syncModeUI();
 
-  // Two-step character selection built from the roster: step 1 picks the
-  // lead (who you play as), step 2 toggles supporters. Whoever is the lead
-  // can't also walk alongside, so their supporter chip is disabled.
-  var charRow = document.getElementById('char-row');
-  var supRow = document.getElementById('sup-row');
-  var charBtns = {};
-  var supBtns = {};
+  // Character selection is a Forge-style carousel picker built from the
+  // roster. The lead carousel picks who you play as; the squad carousel
+  // (with the current lead dropped out) toggles who walks with you; the
+  // team box shows the live squad and taps a member back out. The state
+  // it drives — leadChar + mateSel — is exactly what it was before, so
+  // everything downstream (SQUAD_HAS_ADAM, PLAYING_AS_LEE, resetRun's
+  // squad build) is unchanged; only the presentation differs.
+  var leadCarousel = document.getElementById('lead-carousel');
+  var squadCarousel = document.getElementById('squad-carousel');
+  var teamBox = document.getElementById('team-box');
+  var leadCards = {};
+  var squadCards = {};
+
+  // Fill a circular container with a character's photo over a coloured
+  // fallback disc + initial. register=true keeps a late-loading photo
+  // tracked (for cards built once up front); false is for throwaway
+  // thumbnails that are rebuilt on every squad change.
+  function fillFace(container, k, register) {
+    container.style.background = ROSTER[k].colour;
+    var initial = document.createElement('span');
+    initial.className = 'initial';
+    initial.textContent = ROSTER[k].name.charAt(0);
+    container.appendChild(initial);
+    var img = document.createElement('img');
+    img.alt = '';
+    img.draggable = false;
+    img.hidden = true;
+    if (avatarImgs[k]) {
+      img.src = avatarImgs[k].src;
+      img.hidden = false;
+    } else if (register) {
+      avatarFaceEls[k].push(img);
+    }
+    container.appendChild(img);
+  }
+
+  function buildCard(k) {
+    var card = document.createElement('button');
+    card.className = 'card';
+    card.type = 'button';
+    var disc = document.createElement('span');
+    disc.className = 'disc';
+    fillFace(disc, k, true);
+    card.appendChild(disc);
+    var name = document.createElement('span');
+    name.className = 'cname';
+    name.textContent = ROSTER[k].name.toUpperCase();
+    card.appendChild(name);
+    return card;
+  }
+
+  // Rebuild the team box from the current squad selection.
+  function renderTeam() {
+    if (!teamBox) return;
+    teamBox.textContent = '';
+    var any = false;
+    ROSTER_ORDER.forEach(function (k) {
+      if (k === leadChar || !mateSel[k]) return;
+      any = true;
+      var thumb = document.createElement('button');
+      thumb.className = 'team-thumb';
+      thumb.type = 'button';
+      thumb.title = ROSTER[k].name;
+      fillFace(thumb, k, false);
+      var rm = document.createElement('span');
+      rm.className = 'rm';
+      rm.textContent = '×'; // ×
+      thumb.appendChild(rm);
+      thumb.addEventListener('click', function (e) {
+        e.stopPropagation();
+        mateSel[k] = false;
+        syncSelectionUI();
+      });
+      teamBox.appendChild(thumb);
+    });
+    if (!any) {
+      var empty = document.createElement('span');
+      empty.className = 'team-empty';
+      empty.textContent = 'TAP MATES ABOVE TO ADD THEM';
+      teamBox.appendChild(empty);
+    }
+  }
 
   function syncSelectionUI() {
-    for (var i = 0; i < ROSTER_ORDER.length; i++) {
-      var k = ROSTER_ORDER[i];
-      charBtns[k].classList.toggle('lead', k === leadChar);
-      var isLead = (k === leadChar);
-      supBtns[k].disabled = isLead;
-      if (isLead) mateSel[k] = false; // can't walk with yourself
-      supBtns[k].classList.toggle('on', !!mateSel[k]);
-    }
-  }
-
-  // A chip is the photo face (when that character's photo has loaded —
-  // otherwise it stays hidden and the chip is the plain text pill) plus
-  // the name. Selection behaviour is untouched; only the look changes.
-  function buildChip(k, label) {
-    var b = document.createElement('button');
-    b.className = 'mate';
-    var face = document.createElement('img');
-    face.className = 'face';
-    face.alt = '';
-    face.hidden = true;
-    face.draggable = false;
-    if (avatarImgs[k]) {
-      face.src = avatarImgs[k].src;
-      face.hidden = false;
-    } else {
-      avatarFaceEls[k].push(face);
-    }
-    b.appendChild(face);
-    var name = document.createElement('span');
-    name.textContent = label;
-    b.appendChild(name);
-    return b;
-  }
-
-  if (charRow && supRow) {
     ROSTER_ORDER.forEach(function (k) {
-      var label = ROSTER[k].name.toUpperCase();
+      var isLead = (k === leadChar);
+      if (isLead) mateSel[k] = false; // can't walk with yourself
+      if (leadCards[k]) leadCards[k].classList.toggle('lead', isLead);
+      if (squadCards[k]) {
+        squadCards[k].classList.toggle('excluded', isLead);
+        squadCards[k].classList.toggle('picked', !!mateSel[k]);
+      }
+    });
+    renderTeam();
+  }
 
-      var cb = buildChip(k, label);
-      cb.addEventListener('click', function (e) {
+  if (leadCarousel && squadCarousel && teamBox) {
+    // Taps inside the picker must not bubble to the start-screen's
+    // tap-anywhere-to-begin handler, or choosing a character would launch
+    // the run. Each card stops its own event; these guard empty gaps too.
+    [leadCarousel, squadCarousel, teamBox].forEach(function (el) {
+      el.addEventListener('click', function (e) { e.stopPropagation(); });
+    });
+
+    ROSTER_ORDER.forEach(function (k) {
+      var lc = buildCard(k);
+      lc.addEventListener('click', function (e) {
         e.stopPropagation();
         leadChar = k;
         syncSelectionUI();
+        lc.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
       });
-      charRow.appendChild(cb);
-      charBtns[k] = cb;
+      leadCarousel.appendChild(lc);
+      leadCards[k] = lc;
 
-      var sb = buildChip(k, label);
-      sb.addEventListener('click', function (e) {
+      var sc = buildCard(k);
+      sc.addEventListener('click', function (e) {
         e.stopPropagation();
         if (k === leadChar) return;
         mateSel[k] = !mateSel[k];
-        sb.classList.toggle('on', mateSel[k]);
+        syncSelectionUI();
       });
-      supRow.appendChild(sb);
-      supBtns[k] = sb;
+      squadCarousel.appendChild(sc);
+      squadCards[k] = sc;
     });
     syncSelectionUI();
   }
