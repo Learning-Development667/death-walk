@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.19.0';
+  var VERSION = '0.20.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -918,11 +918,11 @@
   var leadCarousel = null;
   var squadCarousel = null;
 
-  // Actual on-disk filenames (note Keith's capital K — GitHub Pages is
-  // case-sensitive). Focal point defaults to [50, 30] for every avatar;
+  // On-disk avatar filenames — all lowercase to match the naming
+  // convention. Focal point defaults to [50, 30] for every avatar;
   // per-character focal tuning is a planned follow-up.
   var AVATAR_FILE = {
-    robby: 'robby.png', lee: 'lee.png', al: 'al.png', keith: 'Keith.png',
+    robby: 'robby.png', lee: 'lee.png', al: 'al.png', keith: 'keith.png',
     skidz: 'skidz.png', phil: 'phil.png', adam: 'adam.png',
     churchy: 'churchy.png', shippy: 'shippy.png', steve: 'steve.png'
   };
@@ -1140,7 +1140,11 @@
   //   penalty   seconds added on collision (always a stumble)
   // ---------------------------------------------------------------------
   var SCENERY_TYPES = {
-    palm:  { interval: 18, offset: 10, lanes: [0.24, 0.76], jitter: 0.05,
+    // Palms line the very edges of the promenade — left lane hugs the
+    // sea-wall/drop, right lane sits against the building kerb — so the
+    // central walking corridor stays clear for wide, arm-in-arm squads.
+    // Only the fixed scenery moved; the trapezoid/perspective is untouched.
+    palm:  { interval: 18, offset: 10, lanes: [0.10, 0.90], jitter: 0.03,
              width: 30, hit: 0.5, penalty: 2 },
     bench: { interval: 48, offset: 30, lanes: [0.07], jitter: 0.02,
              width: 38, hit: 0.9, penalty: 2 },
