@@ -360,6 +360,41 @@
     /* Dark glyph on the gold arrows for contrast. */
     .dm-arrow { color: #0a1628; }
 
+    /* Device-owner identity screen — reuses the coverflow carousel. */
+    #owner-screen { overflow-y: auto; }
+    .owner-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+    }
+    .owner-step.hidden { display: none; }
+    #owner-carousel { --dm-carousel-h: 256px; width: 100%; }
+    #owner-carousel .dm-name { font-size: 26px; }
+    .owner-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(44px, 13vw, 90px);
+      line-height: 0.95;
+      letter-spacing: 0.04em;
+      color: #ffffff;
+      text-align: center;
+      text-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Unobtrusive "change device owner" link on the start screen. */
+    .owner-link {
+      margin-top: 24px;
+      background: none;
+      border: none;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      color: rgba(143, 180, 217, 0.5);
+      text-decoration: underline;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
     /* A squad member already in the team reads gold, name and ring. */
     .dm-card.dm-picked .dm-name { color: #ffd166; }
     .dm-card.dm-picked .dm-ring::before { border-color: #ffd166; }
@@ -367,6 +402,25 @@
 </head>
 <body>
   <canvas id="game"></canvas>
+
+  <!-- One-time device-owner identity, shown before the start screen on a
+       fresh device. Separate from per-run character selection. -->
+  <div id="owner-screen" class="overlay hidden">
+    <div id="owner-pick" class="owner-step">
+      <div class="owner-title">WHOSE PHONE<br>IS THIS?</div>
+      <div class="subtitle">Pick your face — we’ll remember it</div>
+      <div class="dm-lead" id="owner-carousel"></div>
+      <div class="prompt small">SWIPE TO YOU — TAP TO PICK</div>
+    </div>
+    <div id="owner-confirm" class="owner-step hidden">
+      <div class="title" id="owner-confirm-name">You are …</div>
+      <div class="subtitle">Is that right?</div>
+      <div class="hand-row">
+        <button class="btn" id="owner-back-btn">BACK</button>
+        <button class="btn" id="owner-confirm-btn">CONFIRM</button>
+      </div>
+    </div>
+  </div>
 
   <div id="start-screen" class="overlay start-scroll">
     <div class="title">DEATH MARCH</div>
@@ -388,6 +442,7 @@
       <button class="btn" id="hand-left">LEFTY</button>
       <button class="btn" id="hand-right">RIGHTY</button>
     </div>
+    <button class="owner-link" id="owner-change"></button>
   </div>
 
   <div id="end-screen" class="overlay hidden">

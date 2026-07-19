@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.21.0';
+  var VERSION = '0.22.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1199,6 +1199,125 @@
     endScreen.classList.add('hidden');
     resetRun();
   });
+
+  // ---------------------------------------------------------------------
+  // Device owner — a persistent "whose phone is this" identity, distinct
+  // from the per-run character you play as. Established once via its own
+  // coverflow picker (reusing DMCarousel) with a confirm step, then
+  // remembered in localStorage forever. This is the identity future score
+  // /achievement persistence (Firestore) will attribute records to; here
+  // we only establish and store it. It does NOT touch leadChar/mateSel.
+  // ---------------------------------------------------------------------
+  var OWNER_STORE_KEY = 'deathMarchDeviceOwner';
+  var deviceOwner = null; // { key, name } once known
+
+  function loadOwner() {
+    try {
+      var v = JSON.parse(localStorage.getItem(OWNER_STORE_KEY));
+      return (v && v.key && ROSTER[v.key]) ? v : null;
+    } catch (e) { return null; }
+  }
+  function saveOwner(key) {
+    try {
+      localStorage.setItem(OWNER_STORE_KEY,
+        JSON.stringify({ key: key, name: ROSTER[key].name }));
+    } catch (e) {}
+  }
+
+  var ownerScreen = document.getElementById('owner-screen');
+  var ownerPickView = document.getElementById('owner-pick');
+  var ownerConfirmView = document.getElementById('owner-confirm');
+  var ownerConfirmName = document.getElementById('owner-confirm-name');
+  var ownerConfirmBtn = document.getElementById('owner-confirm-btn');
+  var ownerBackBtn = document.getElementById('owner-back-btn');
+  var ownerChangeBtn = document.getElementById('owner-change');
+  var ownerMount = document.getElementById('owner-carousel');
+  var ownerCarousel = null;
+  var pendingOwner = null; // key awaiting CONFIRM
+
+  // The small start-screen link that lets someone deliberately reset the
+  // owner — deliberately low-key so it isn't tripped into by accident.
+  function refreshOwnerLine() {
+    if (!ownerChangeBtn) return;
+    ownerChangeBtn.textContent = deviceOwner
+      ? 'This is ' + deviceOwner.name + '’s phone · change'
+      : '';
+    ownerChangeBtn.style.display = deviceOwner ? '' : 'none';
+  }
+
+  function buildOwnerCarousel() {
+    if (ownerCarousel || !ownerMount || typeof DMCarousel !== 'function') return;
+    // Keep taps inside the picker from doing anything unexpected.
+    ownerMount.addEventListener('click', function (e) { e.stopPropagation(); });
+    ownerCarousel = new DMCarousel({
+      mount: ownerMount,
+      avatars: ROSTER_ORDER.map(avatarSpec),
+      startName: ROSTER[(deviceOwner && deviceOwner.key) || ROSTER_ORDER[0]].name,
+      onChange: function () { /* browsing only */ },
+      onSelect: function (a) {
+        if (!a || !a.key) return;
+        pendingOwner = a.key;
+        showOwnerConfirm();
+      }
+    });
+    guardPhotos(ownerCarousel);
+  }
+
+  function showOwnerConfirm() {
+    if (ownerConfirmName) {
+      ownerConfirmName.textContent = 'You are ' + ROSTER[pendingOwner].name;
+    }
+    if (ownerPickView) ownerPickView.classList.add('hidden');
+    if (ownerConfirmView) ownerConfirmView.classList.remove('hidden');
+  }
+  function showOwnerPick() {
+    pendingOwner = null;
+    if (ownerConfirmView) ownerConfirmView.classList.add('hidden');
+    if (ownerPickView) ownerPickView.classList.remove('hidden');
+  }
+
+  function openOwnerSetup() {
+    buildOwnerCarousel();
+    // Point the picker at the current owner when changing, if any.
+    if (ownerCarousel && deviceOwner) {
+      ownerCarousel.setIndexByName(deviceOwner.name);
+    }
+    showOwnerPick();
+    if (startScreen) startScreen.classList.add('hidden');
+    if (ownerScreen) ownerScreen.classList.remove('hidden');
+  }
+  function closeOwnerSetup() {
+    if (ownerScreen) ownerScreen.classList.add('hidden');
+    if (startScreen) startScreen.classList.remove('hidden');
+  }
+
+  if (ownerConfirmBtn) {
+    ownerConfirmBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!pendingOwner) return;
+      saveOwner(pendingOwner);
+      deviceOwner = loadOwner();
+      refreshOwnerLine();
+      closeOwnerSetup();
+    });
+  }
+  if (ownerBackBtn) {
+    ownerBackBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      showOwnerPick();
+    });
+  }
+  if (ownerChangeBtn) {
+    ownerChangeBtn.addEventListener('click', function (e) {
+      e.stopPropagation(); // must not bubble to the tap-to-start handler
+      openOwnerSetup();
+    });
+  }
+
+  // Boot: known owner → straight to the start screen; unknown → set it up.
+  deviceOwner = loadOwner();
+  refreshOwnerLine();
+  if (!deviceOwner) openOwnerSetup();
 
   // ---------------------------------------------------------------------
   // Hazards — data-driven: each type is a config entry, and adding a new
