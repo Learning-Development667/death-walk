@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.32.0';
+  var VERSION = '0.33.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -374,7 +374,7 @@
     { id: 'tikiTumbleSurvivor', name: 'Tiki Tumble Survivor',
       desc: 'Take a Tiki Tumble and still make it to the end.', secret: false },
     { id: 'philFirstToBar', name: "No way! Phil's first to the bar",
-      desc: 'Playing as Phil, reach Daytona by the proper finish.', secret: false },
+      desc: 'Playing as Phil, reach Daytona by the proper finish.', secret: true },
     { id: 'tatTrifecta', name: 'Tat Trifecta',
       desc: 'Deck the squad in shades, hat AND chain in a single walk.', secret: true },
     { id: 'closeCall', name: 'Close Call',
@@ -573,6 +573,7 @@
     selfieUsed = {};
     portalooUsed = false;
     steveUsed = false;
+    sharkFedShown = false;
     islandUsed = false;
     skidzSoiled = false;
     closeAllOverlays();
@@ -2122,11 +2123,19 @@
     if (SQUAD_HAS_ADAM) {
       // TEMP Adam flavour until Phase 4 character select: invincibility
       // replaces the points bonus for any positive hen contact
-      invulnUntil = frameNow + ADAM_INVULN_MS;
-      queuePhotoOverlay({
-        image: 'images/achievements/shark-fed.png',
-        caption: 'The shark has fed, all the little fish are happy',
-      });
+      invulnUntil = frameNow + ADAM_INVULN_MS; // invincibility every time
+      if (!sharkFedShown) {
+        // The full image + message pauses only the first time each run
+        sharkFedShown = true;
+        queuePhotoOverlay({
+          image: 'images/achievements/shark-fed.png',
+          caption: 'The shark has fed, all the little fish are happy',
+        });
+      } else {
+        // Subsequent encounters: invincibility applies silently, just a
+        // low-key non-pausing HUD line
+        notify('The shark has fed again');
+      }
       unlockAchievement('sharkFed', 'The Shark Has Fed', true);
       if (delivered) unlockAchievement('bridesBouquet', "Bride's Bouquet", true);
       return;
@@ -2391,6 +2400,7 @@
 
   var portalooUsed = false;
   var steveUsed = false;
+  var sharkFedShown = false; // shark-fed overlay shows once per run
 
   // The portaloo sits on the side street in window 2 (~150-210m); the
   // ice cream shop is a doorway in the frontage a couple of blocks
