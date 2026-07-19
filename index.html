@@ -196,6 +196,27 @@
       opacity: 0.28;
     }
 
+    /* Real avatar photo inside a selection chip. The photos are tall oval
+       cameos, so cover-crop them into a circle anchored near the face.
+       The img stays hidden until its photo loads — a character with no
+       photo yet keeps the plain text pill. */
+    .mate {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .mate .face {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      object-fit: cover;
+      object-position: 50% 16%;
+      background: rgba(255, 255, 255, 0.08);
+      flex: none;
+      pointer-events: none;
+    }
+
     .start-scroll {
       overflow-y: auto;
       justify-content: flex-start;

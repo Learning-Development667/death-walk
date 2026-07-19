@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.16.0';
+  var VERSION = '0.17.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -215,8 +215,7 @@
   var PLAYING_AS_LEE = false;  // true only when Lee is the chosen lead
 
   // The full roster. The player is always ONE of these (the lead), and any
-  // of the others can be picked to walk alongside. (Real Firefly avatars
-  // are Phase 2 — placeholder coloured circles for now.)
+  // of the others can be picked to walk alongside.
   var ROSTER = {
     robby:   { name: 'Robby',   colour: '#f77f00' },
     lee:     { name: 'Lee',     colour: '#7fd069' },
@@ -231,6 +230,49 @@
   };
   var ROSTER_ORDER = ['robby', 'lee', 'al', 'keith', 'skidz', 'phil',
                       'adam', 'churchy', 'shippy', 'steve'];
+
+  // Real avatar photos — oval cameo portraits with transparent corners,
+  // faces sitting in the upper-middle of the frame. Filenames are tried
+  // lowercase then Capitalised (uploads vary), and a character whose
+  // photo is missing simply keeps the placeholder circle everywhere, so
+  // new photos drop into images/avatars/ with no code changes.
+  var AVATAR_FACE_Y = 0.35;  // face centre as a fraction of image height
+  var avatarImgs = {};       // key -> loaded Image, present only on success
+  var avatarFaceEls = {};    // key -> [<img>] chips waiting for a photo
+
+  ROSTER_ORDER.forEach(function (k) {
+    avatarFaceEls[k] = [];
+    var tries = ['images/avatars/' + k + '.png',
+                 'images/avatars/' + k.charAt(0).toUpperCase() + k.slice(1) + '.png'];
+    (function attempt(i) {
+      if (i >= tries.length) return; // stays a placeholder
+      var img = new Image();
+      img.onload = function () {
+        avatarImgs[k] = img;
+        avatarFaceEls[k].forEach(function (el) {
+          el.src = img.src;
+          el.hidden = false;
+        });
+      };
+      img.onerror = function () { attempt(i + 1); };
+      img.src = tries[i];
+    })(0);
+  });
+
+  // Cover-crop a photo into a circle: a full-width square window centred
+  // on the face, clipped round. The roster colour fills behind it so any
+  // transparent corner of the oval reads as the character's colour.
+  function drawAvatarPhoto(img, x, y, r) {
+    var iw = img.naturalWidth, ih = img.naturalHeight;
+    var side = Math.min(iw, ih);
+    var sy = Math.min(Math.max(0, ih * AVATAR_FACE_Y - side / 2), ih - side);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(img, (iw - side) / 2, sy, side, side, x - r, y - r, r * 2, r * 2);
+    ctx.restore();
+  }
 
   var leadChar = 'robby';      // who you're playing as this run
   var mateSel = {};            // supporters walking with you, keyed by name
@@ -881,13 +923,35 @@
     }
   }
 
+  // A chip is the photo face (when that character's photo has loaded —
+  // otherwise it stays hidden and the chip is the plain text pill) plus
+  // the name. Selection behaviour is untouched; only the look changes.
+  function buildChip(k, label) {
+    var b = document.createElement('button');
+    b.className = 'mate';
+    var face = document.createElement('img');
+    face.className = 'face';
+    face.alt = '';
+    face.hidden = true;
+    face.draggable = false;
+    if (avatarImgs[k]) {
+      face.src = avatarImgs[k].src;
+      face.hidden = false;
+    } else {
+      avatarFaceEls[k].push(face);
+    }
+    b.appendChild(face);
+    var name = document.createElement('span');
+    name.textContent = label;
+    b.appendChild(name);
+    return b;
+  }
+
   if (charRow && supRow) {
     ROSTER_ORDER.forEach(function (k) {
       var label = ROSTER[k].name.toUpperCase();
 
-      var cb = document.createElement('button');
-      cb.className = 'mate';
-      cb.textContent = label;
+      var cb = buildChip(k, label);
       cb.addEventListener('click', function (e) {
         e.stopPropagation();
         leadChar = k;
@@ -896,9 +960,7 @@
       charRow.appendChild(cb);
       charBtns[k] = cb;
 
-      var sb = document.createElement('button');
-      sb.className = 'mate';
-      sb.textContent = label;
+      var sb = buildChip(k, label);
       sb.addEventListener('click', function (e) {
         e.stopPropagation();
         if (k === leadChar) return;
@@ -2984,15 +3046,25 @@
   // wares from the looky looky men appear on EVERY avatar, the shared
   // haul being the reward. The player's own avatar is the big one and
   // also shows the carried rose. Lost mates grey out where they stand.
-  function drawAvatar(x, y, r, isPlayer, colour, lost) {
+  function drawAvatar(x, y, r, isPlayer, colour, lost, key) {
+    var photo = key && avatarImgs[key];
     if (lost) {
-      // Benched: dimmed shell, no wares, no colour
+      // Benched: dimmed shell, no wares, no colour — a ghost of the
+      // photo stays visible so you can tell who you lost
       ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
+      if (photo) {
+        ctx.save();
+        ctx.globalAlpha = 0.18;
+        drawAvatarPhoto(photo, x, y, r);
+        ctx.restore();
+      }
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.stroke();
       return;
     }
@@ -3001,8 +3073,11 @@
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
+    if (photo) drawAvatarPhoto(photo, x, y, r);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
     ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.stroke();
 
     if (squadItems.shades) {
@@ -3037,9 +3112,6 @@
 
   // The control footer: a dedicated zone below the gameplay view holding
   // the joystick and the squad avatar row (the group's outfit display).
-  // PLACEHOLDER: the three smaller circles await Phase 3's squad size /
-  // lives system for real member avatars and greyed-out states — only
-  // the layout and shared-wares display live here for now.
   function drawFooter() {
     var gb = gameBottom();
 
@@ -3055,9 +3127,9 @@
     var cx = areaStart + (W - stickReserve) / 2;
     var cy = gb + FOOTER_H / 2;
 
-    drawAvatar(cx - 56, cy, 22, true, leadColour(), false); // the player, larger
+    drawAvatar(cx - 56, cy, 22, true, leadColour(), false, leadChar); // the player, larger
     for (var i = 0; i < squad.length; i++) {
-      drawAvatar(cx + i * 34, cy, 12, false, squad[i].colour, squad[i].lost);
+      drawAvatar(cx + i * 34, cy, 12, false, squad[i].colour, squad[i].lost, squad[i].key);
     }
   }
 
