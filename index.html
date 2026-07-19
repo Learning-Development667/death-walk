@@ -381,6 +381,104 @@
       text-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
     }
 
+    /* Achievements — a subtle-but-clear start-screen entry point. */
+    .ach-link {
+      margin-top: 26px;
+      background: transparent;
+      border: 1.5px solid rgba(255, 209, 102, 0.5);
+      border-radius: 20px;
+      padding: 9px 20px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: #ffd166;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .ach-link:active { transform: scale(0.96); }
+
+    /* Achievements page. */
+    .ach-scroll {
+      overflow-y: auto;
+      justify-content: flex-start;
+      padding-top: calc(28px + env(safe-area-inset-top));
+      padding-bottom: 40px;
+    }
+    .ach-title { font-size: clamp(40px, 12vw, 76px); }
+    .ach-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      letter-spacing: 0.18em;
+      color: #ffd166;
+      margin-top: 6px;
+    }
+    .ach-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: 100%;
+      max-width: 430px;
+      margin: 20px 0 28px;
+    }
+    .ach-card {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      text-align: left;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(143, 180, 217, 0.18);
+      border-radius: 12px;
+      padding: 13px 15px;
+    }
+    .ach-card.unlocked {
+      background: rgba(255, 209, 102, 0.10);
+      border-color: rgba(255, 209, 102, 0.5);
+    }
+    .ach-card.locked { opacity: 0.72; }
+    .ach-badge {
+      flex: none;
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px;
+    }
+    .ach-card.locked .ach-badge {
+      background: rgba(255, 255, 255, 0.07);
+      color: rgba(143, 180, 217, 0.65);
+    }
+    .ach-card.unlocked .ach-badge {
+      background: #ffd166;
+      color: #0a1628;
+    }
+    .ach-body { flex: 1; min-width: 0; }
+    .ach-name {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px;
+      letter-spacing: 0.04em;
+      color: #ffffff;
+    }
+    .ach-card.locked .ach-name { color: rgba(236, 240, 248, 0.6); }
+    .ach-desc {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12.5px;
+      line-height: 1.35;
+      color: #8fb4d9;
+      margin-top: 2px;
+    }
+    .ach-date {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      color: rgba(255, 209, 102, 0.8);
+      margin-top: 5px;
+    }
+    #achievements-screen .btn { margin-top: 8px; }
+
     /* Unobtrusive "change device owner" link on the start screen. */
     .owner-link {
       margin-top: 24px;
@@ -442,7 +540,15 @@
       <button class="btn" id="hand-left">LEFTY</button>
       <button class="btn" id="hand-right">RIGHTY</button>
     </div>
+    <button class="ach-link" id="open-achievements">🏆 ACHIEVEMENTS</button>
     <button class="owner-link" id="owner-change"></button>
+  </div>
+
+  <div id="achievements-screen" class="overlay hidden ach-scroll">
+    <div class="owner-title ach-title">ACHIEVEMENTS</div>
+    <div class="ach-count" id="ach-count"></div>
+    <div class="ach-list" id="ach-list"></div>
+    <button class="btn" id="ach-back">BACK</button>
   </div>
 
   <div id="end-screen" class="overlay hidden">

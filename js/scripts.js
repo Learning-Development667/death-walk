@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.22.0';
+  var VERSION = '0.23.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -325,9 +325,78 @@
   // every avatar in the squad row when collected
   var squadItems = { shades: false, hat: false, chain: false };
 
-  // Achievements — simple local store for now (no Firestore yet).
-  // Persists across runs within the session, never reset by resetRun.
+  // ---------------------------------------------------------------------
+  // Achievements. The catalogue below is the single source of truth for
+  // the achievements page (names, descriptions, secret flags). Unlocks are
+  // persisted to localStorage keyed by the device owner, in a shape that
+  // maps straight onto a future Firestore doc
+  // (users/<owner>/achievements/<id> = { unlocked, unlockedAt }) so the
+  // sync can be added later without rebuilding any of this tracking.
+  //
+  // `secret` achievements hide their name/description on the page until
+  // earned (they line up with the important=true story-beat unlocks).
+  // ---------------------------------------------------------------------
+  var ACHIEVEMENT_DEFS = [
+    { id: 'shadyBusiness', name: 'Shady Business',
+      desc: 'Grab a pair of shades off a looky looky man.', secret: false },
+    { id: 'hatsOff', name: 'Hats Off',
+      desc: 'Pick up a knock-off hat from a street seller.', secret: false },
+    { id: 'chainReaction', name: 'Chain Reaction',
+      desc: 'Bag some gold bling from a chain seller.', secret: false },
+    { id: 'nobodyLeftBehind', name: 'Nobody Left Behind',
+      desc: 'Reach the finish with your whole squad still standing.', secret: false },
+    { id: 'tikiTumbleSurvivor', name: 'Tiki Tumble Survivor',
+      desc: 'Take a Tiki Tumble and still make it to the end.', secret: false },
+    { id: 'tatTrifecta', name: 'Tat Trifecta',
+      desc: 'Deck the squad in shades, hat AND chain in a single walk.', secret: true },
+    { id: 'closeCall', name: 'Close Call',
+      desc: 'Get Skidz to the portaloo in the nick of time.', secret: true },
+    { id: 'sharingTheLove', name: 'Sharing the Love',
+      desc: 'Carry a rose into the drunk lads and share it round.', secret: true },
+    { id: 'bridesBouquet', name: "Bride's Bouquet",
+      desc: 'Deliver a rose to the bride on her hen do.', secret: true },
+  ];
+  var ACHIEVEMENT_MAP = {};
+  ACHIEVEMENT_DEFS.forEach(function (d) { ACHIEVEMENT_MAP[d.id] = d; });
+
+  var ACHIEVEMENTS_STORE_KEY = 'deathMarchAchievements';
+
+  // In-memory mirror of the current owner's unlocks (for run-time dedup so
+  // an already-earned achievement doesn't re-toast). Loaded from storage
+  // on boot / owner change; never wiped by resetRun.
   var achievements = {};
+
+  // The whole store, shape: { <ownerKey>: { <id>: { unlocked, unlockedAt } } }
+  function loadAchievementStoreAll() {
+    try { return JSON.parse(localStorage.getItem(ACHIEVEMENTS_STORE_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  // Just the current owner's records.
+  function ownerAchievements() {
+    if (!deviceOwner) return {};
+    return loadAchievementStoreAll()[deviceOwner.key] || {};
+  }
+  // Pull the owner's persisted unlocks into the in-memory mirror.
+  function loadOwnerAchievements() {
+    achievements = {};
+    var mine = ownerAchievements();
+    for (var id in mine) {
+      if (mine[id] && mine[id].unlocked) achievements[id] = true;
+    }
+  }
+  // Persist one unlock against the current owner (timestamped).
+  function recordAchievement(id) {
+    if (!deviceOwner) return;
+    try {
+      var all = loadAchievementStoreAll();
+      var mine = all[deviceOwner.key] || {};
+      if (!mine[id] || !mine[id].unlocked) {
+        mine[id] = { unlocked: true, unlockedAt: Date.now() };
+        all[deviceOwner.key] = mine;
+        localStorage.setItem(ACHIEVEMENTS_STORE_KEY, JSON.stringify(all));
+      }
+    } catch (e) {}
+  }
 
   var noticeText = '';
   var noticeUntil = 0;
@@ -338,10 +407,12 @@
   }
 
   // `important` routes the unlock through the pause overlay — used for
-  // the secret story-beat achievements; ordinary ones stay ambient.
+  // the secret story-beat achievements; ordinary ones stay ambient. The
+  // unlock is persisted against the device owner either way.
   function unlockAchievement(id, label, important) {
     if (achievements[id]) return;
     achievements[id] = true;
+    recordAchievement(id);
     if (important) showMessage('ACHIEVEMENT UNLOCKED: ' + label);
     else notify('ACHIEVEMENT: ' + label);
   }
@@ -1297,6 +1368,7 @@
       if (!pendingOwner) return;
       saveOwner(pendingOwner);
       deviceOwner = loadOwner();
+      loadOwnerAchievements(); // switch to the new owner's records
       refreshOwnerLine();
       closeOwnerSetup();
     });
@@ -1316,8 +1388,104 @@
 
   // Boot: known owner → straight to the start screen; unknown → set it up.
   deviceOwner = loadOwner();
+  loadOwnerAchievements();
   refreshOwnerLine();
   if (!deviceOwner) openOwnerSetup();
+
+  // ---------------------------------------------------------------------
+  // Achievements page — a browsable list of every achievement with its
+  // locked/unlocked state, built from ACHIEVEMENT_DEFS + the owner's
+  // persisted records. Reachable from a low-key start-screen link.
+  // ---------------------------------------------------------------------
+  var achScreen = document.getElementById('achievements-screen');
+  var achListEl = document.getElementById('ach-list');
+  var achCountEl = document.getElementById('ach-count');
+  var achBackBtn = document.getElementById('ach-back');
+  var openAchBtn = document.getElementById('open-achievements');
+
+  function formatAchDate(ms) {
+    try {
+      var d = new Date(ms);
+      var mons = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+                  'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      return d.getDate() + ' ' + mons[d.getMonth()] + ' ' + d.getFullYear();
+    } catch (e) { return ''; }
+  }
+
+  function buildAchievementsPage() {
+    if (!achListEl) return;
+    var mine = ownerAchievements();
+    achListEl.textContent = '';
+    var unlocked = 0;
+
+    ACHIEVEMENT_DEFS.forEach(function (def) {
+      var rec = mine[def.id];
+      var isUnlocked = !!(rec && rec.unlocked) || !!achievements[def.id];
+      if (isUnlocked) unlocked++;
+      var secretLocked = def.secret && !isUnlocked;
+
+      var card = document.createElement('div');
+      card.className = 'ach-card ' + (isUnlocked ? 'unlocked' : 'locked') +
+        (def.secret ? ' secret' : '');
+
+      var badge = document.createElement('div');
+      badge.className = 'ach-badge';
+      badge.textContent = isUnlocked ? '✓' : (def.secret ? '?' : '🔒');
+      card.appendChild(badge);
+
+      var body = document.createElement('div');
+      body.className = 'ach-body';
+
+      var name = document.createElement('div');
+      name.className = 'ach-name';
+      name.textContent = secretLocked ? '???' : def.name;
+      body.appendChild(name);
+
+      var desc = document.createElement('div');
+      desc.className = 'ach-desc';
+      desc.textContent = secretLocked
+        ? 'Secret achievement — keep walking to uncover it.'
+        : def.desc;
+      body.appendChild(desc);
+
+      if (isUnlocked && rec && rec.unlockedAt) {
+        var date = document.createElement('div');
+        date.className = 'ach-date';
+        date.textContent = 'UNLOCKED ' + formatAchDate(rec.unlockedAt);
+        body.appendChild(date);
+      }
+
+      card.appendChild(body);
+      achListEl.appendChild(card);
+    });
+
+    if (achCountEl) {
+      achCountEl.textContent = unlocked + ' / ' + ACHIEVEMENT_DEFS.length + ' UNLOCKED';
+    }
+  }
+
+  function openAchievements() {
+    buildAchievementsPage();
+    if (startScreen) startScreen.classList.add('hidden');
+    if (achScreen) achScreen.classList.remove('hidden');
+  }
+  function closeAchievements() {
+    if (achScreen) achScreen.classList.add('hidden');
+    if (startScreen) startScreen.classList.remove('hidden');
+  }
+
+  if (openAchBtn) {
+    openAchBtn.addEventListener('click', function (e) {
+      e.stopPropagation(); // must not bubble to the tap-to-start handler
+      openAchievements();
+    });
+  }
+  if (achBackBtn) {
+    achBackBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeAchievements();
+    });
+  }
 
   // ---------------------------------------------------------------------
   // Hazards — data-driven: each type is a config entry, and adding a new
@@ -1427,16 +1595,21 @@
   // ---------------------------------------------------------------------
   //   endless  only ever spawns in Endless mode (Classic never sees it)
   //   laneU    fixed lane instead of a random one (the loo hugs the kerb)
+  //   spawnChance  probability the pick actually materialises (missing
+  //            values = always). Thins a type out WITHOUT touching the
+  //            weighted pick, so other types' rates are provably unchanged
+  //            — a skipped roll just yields an empty spawn cycle.
   // The loo's sober-up amount isn't in its config: it reuses the portaloo
   // stop's PORTALOO_SOBER / _SOBER_SKIDZ values at collection time.
   var PICKUP_TYPES = {
     beer:     { spawn: [45, 80], width: 20, drunk: 1, weight: 1, colour: '#ffc233' },
-    // Endless survival set — three sobering tiers, rarer as they get
-    // stronger, tuned so a skilled player can hold a run indefinitely
+    // Endless survival set — three sobering tiers. water/iceCream are
+    // deliberately thinned via spawnChance (~half as often) so staying
+    // sober takes real care; beer and the portaloo are left untouched.
     water:    { spawn: [45, 80], width: 18, drunk: -0.8, weight: 0.85,
-                colour: '#5bc8f5', endless: true },
+                spawnChance: 0.5, colour: '#5bc8f5', endless: true },
     iceCream: { spawn: [45, 80], width: 18, drunk: -1.6, weight: 0.4,
-                colour: '#ffd9e8', endless: true },
+                spawnChance: 0.5, colour: '#ffd9e8', endless: true },
     loo:      { spawn: [50, 85], width: 26, drunk: 0, weight: 0.2,
                 colour: '#2d7dd2', laneU: 0.9, endless: true },
   };
@@ -1911,6 +2084,10 @@
     var types = activePickupTypes();
     var key = weightedPick(types);
     var cfg = types[key];
+    // A thinned type (water/iceCream) sometimes doesn't materialise — an
+    // empty cycle. Beer and the loo have no spawnChance, so their rates
+    // are unchanged by this.
+    if (cfg.spawnChance !== undefined && Math.random() >= cfg.spawnChance) return;
     pickups.push({
       key: key,
       cfg: cfg,
