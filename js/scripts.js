@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.25.0';
+  var VERSION = '0.26.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -354,7 +354,8 @@
     { id: 'sharingTheLove', name: 'Sharing the Love',
       desc: 'Carry a rose into the drunk lads and share it round.', secret: true },
     { id: 'bridesBouquet', name: "Bride's Bouquet",
-      desc: 'Deliver a rose to the bride on her hen do.', secret: true },
+      desc: 'Deliver a rose to the bride on her hen do.', secret: true,
+      image: 'images/achievements/brides-bouquet.png' },
   ];
   var ACHIEVEMENT_MAP = {};
   ACHIEVEMENT_DEFS.forEach(function (d) { ACHIEVEMENT_MAP[d.id] = d; });
@@ -1498,10 +1499,29 @@
       card.className = 'ach-card ' + (isUnlocked ? 'unlocked' : 'locked') +
         (def.secret ? ' secret' : '');
 
-      var badge = document.createElement('div');
-      badge.className = 'ach-badge';
-      badge.textContent = isUnlocked ? '✓' : (def.secret ? '?' : '🔒');
-      card.appendChild(badge);
+      // Unlocked achievements with their own art show a small thumbnail
+      // (with a ✓ corner) in place of the plain badge; a locked secret
+      // never reveals its image — it stays the "?" mystery badge.
+      if (isUnlocked && def.image) {
+        var thumbWrap = document.createElement('span');
+        thumbWrap.className = 'ach-thumb-wrap';
+        var thumb = document.createElement('img');
+        thumb.className = 'ach-thumb';
+        thumb.src = def.image;
+        thumb.alt = def.name;
+        thumb.draggable = false;
+        thumbWrap.appendChild(thumb);
+        var tick = document.createElement('span');
+        tick.className = 'ach-thumb-tick';
+        tick.textContent = '✓';
+        thumbWrap.appendChild(tick);
+        card.appendChild(thumbWrap);
+      } else {
+        var badge = document.createElement('div');
+        badge.className = 'ach-badge';
+        badge.textContent = isUnlocked ? '✓' : (def.secret ? '?' : '🔒');
+        card.appendChild(badge);
+      }
 
       var body = document.createElement('div');
       body.className = 'ach-body';
@@ -2072,7 +2092,10 @@
       // TEMP Adam flavour until Phase 4 character select: invincibility
       // replaces the points bonus for any positive hen contact
       invulnUntil = frameNow + ADAM_INVULN_MS;
-      showMessage('The shark has fed, all the little fish are happy');
+      queuePhotoOverlay({
+        image: 'images/achievements/shark-fed.png',
+        caption: 'The shark has fed, all the little fish are happy',
+      });
       if (delivered) unlockAchievement('bridesBouquet', "Bride's Bouquet", true);
       return;
     }
@@ -2083,9 +2106,9 @@
       drunk = Math.max(0, drunk - SWAGGER_SUPER);
       multUntil = frameNow + CHAT_MULT_MS;
       queuePhotoOverlay({
+        image: 'images/achievements/brides-bouquet.png',
         caption: 'The bride gets her bouquet — the whole hen do erupts! ' +
                  '+' + BRIDE_POINTS,
-        colour: '#d81159', // placeholder — comic strip art comes later
       });
       unlockAchievement('bridesBouquet', "Bride's Bouquet", true);
       return;

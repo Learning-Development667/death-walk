@@ -454,6 +454,40 @@
       background: #ffd166;
       color: #0a1628;
     }
+
+    /* Unlocked achievement art thumbnail (replaces the badge circle). */
+    .ach-thumb-wrap {
+      flex: none;
+      position: relative;
+      width: 44px;
+      height: 56px;
+    }
+    .ach-thumb {
+      width: 44px;
+      height: 56px;
+      object-fit: cover;
+      object-position: 50% 22%; /* bias to the top — that's where the faces are */
+      border-radius: 8px;
+      border: 1.5px solid #ffd166;
+      display: block;
+    }
+    .ach-thumb-tick {
+      position: absolute;
+      right: -5px;
+      bottom: -5px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #ffd166;
+      color: #0a1628;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 11px;
+      line-height: 18px;
+      text-align: center;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    }
+
     .ach-body { flex: 1; min-width: 0; }
     .ach-name {
       font-family: 'Bebas Neue', sans-serif;
