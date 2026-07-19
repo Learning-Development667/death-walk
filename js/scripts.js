@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.31.0';
+  var VERSION = '0.32.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -326,6 +326,26 @@
   // old text chip until it is.
   var roseIcon = new Image();
   roseIcon.src = 'images/icons/rose-icon.png';
+
+  // Looky-looky wares worn on the squad avatars. Each icon is a square
+  // transparent PNG; w is its drawn size as a multiple of the avatar
+  // radius, and dx/dy nudge its centre (in radii) so it reads as worn:
+  // shades over the eyes, hat on the head, chain round the neck. Drawn
+  // once loaded; falls back to the old placeholder shape until then.
+  var itemIcons = {
+    shades: { img: new Image(), src: 'sunglasses-icon.png', w: 1.5,  dx: 0, dy: -0.16 },
+    hat:    { img: new Image(), src: 'hat-icon.png',        w: 1.85, dx: 0, dy: -0.82 },
+    chain:  { img: new Image(), src: 'chain-icon.png',      w: 1.5,  dx: 0, dy: 0.52 },
+  };
+  for (var _ik in itemIcons) itemIcons[_ik].img.src = 'images/icons/' + itemIcons[_ik].src;
+
+  function drawWornIcon(spec, x, y, r) {
+    var img = spec.img;
+    if (!(img.complete && img.naturalWidth > 0)) return false;
+    var s = spec.w * r;
+    ctx.drawImage(img, x + spec.dx * r - s / 2, y + spec.dy * r - s / 2, s, s);
+    return true;
+  }
 
   // Wares bought from the looky looky men this run — each one appears on
   // every avatar in the squad row when collected
@@ -3849,16 +3869,19 @@
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    if (squadItems.shades) {
+    // Wares worn on the avatar — real icons, each falling back to its old
+    // placeholder shape only until the image has loaded. Independent ifs,
+    // so multiple items stack together (shades + hat + chain) unchanged.
+    if (squadItems.shades && !drawWornIcon(itemIcons.shades, x, y, r)) {
       ctx.fillStyle = '#1d1d2b';
       ctx.fillRect(x - r * 0.75, y - r * 0.35, r * 1.5, r * 0.34);
     }
-    if (squadItems.hat) {
+    if (squadItems.hat && !drawWornIcon(itemIcons.hat, x, y, r)) {
       ctx.fillStyle = '#8b5a2b';
       ctx.fillRect(x - r * 0.85, y - r * 1.05, r * 1.7, r * 0.22);
       ctx.fillRect(x - r * 0.5, y - r * 1.45, r, r * 0.45);
     }
-    if (squadItems.chain) {
+    if (squadItems.chain && !drawWornIcon(itemIcons.chain, x, y, r)) {
       ctx.strokeStyle = '#ffd700';
       ctx.lineWidth = Math.max(1.5, r * 0.12);
       ctx.beginPath();
