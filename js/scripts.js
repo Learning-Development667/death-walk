@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.37.0';
+  var VERSION = '0.38.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1750,6 +1750,121 @@
   };
 
   // ---------------------------------------------------------------------
+  // Hazard sprites — real art for a hazard type, animated as a 2-frame
+  // walk cycle. This is the pedestrian proof of concept; every other
+  // hazard type still falls back to its placeholder shape in drawHazard.
+  //
+  // Repeatable pipeline for the rest of the roster (joggers, scooters,
+  // hen parties, drunk lads, performers, vendors): drop a `<type>-1.png`
+  // / `<type>-2.png` pair into images/hazards/, add one entry below, and
+  // guard that type's draw block with `<spec>.ready`. The frame swap
+  // animates the legs; the code-driven drift/positioning in the update
+  // loop still decides where each hazard is.
+  //
+  //   files      the two walk-cycle frames, in images/hazards/
+  //   heightMul  on-screen figure height as a multiple of the type's
+  //              draw width (matches the placeholder's footprint)
+  //
+  // The source art ships on a solid (near-white) background, so each
+  // frame is keyed to transparency once at load — flood-filled from the
+  // borders, so interior lights (the shirt) survive — and the figure's
+  // own foot point / centre / bounds are measured so she stays planted
+  // while the legs cycle. Frames that fail to load or key leave `ready`
+  // false and the placeholder keeps drawing.
+  // ---------------------------------------------------------------------
+  var HAZARD_FRAME_SECS = 0.17; // ~6 fps leg swap: reads as walking, not jitter
+  var HAZARD_SPRITES = {
+    pedestrian: { files: ['pedestrian-1.png', 'pedestrian-2.png'],
+                  heightMul: 2.4, frames: [], ready: false },
+  };
+
+  // Key the background out of one loaded frame and measure the figure.
+  // Returns { canvas, cx, feetY, figW, figH, w, h } in source pixels, or
+  // null if the pixels can't be read (frame then counts as failed).
+  function keyHazardFrame(img) {
+    var w = img.naturalWidth, h = img.naturalHeight;
+    if (!w || !h) return null;
+    var cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    var c = cv.getContext('2d');
+    c.drawImage(img, 0, 0);
+    var data;
+    try { data = c.getImageData(0, 0, w, h); } catch (e) { return null; }
+    var px = data.data;
+    var BG = 236; // all channels at/above this read as background
+    var seen = new Uint8Array(w * h);
+    var stack = [];
+    function seed(x, y) {
+      var p = y * w + x, i = p * 4;
+      if (!seen[p] && px[i] >= BG && px[i + 1] >= BG && px[i + 2] >= BG) {
+        seen[p] = 1; stack.push(p);
+      }
+    }
+    for (var sx = 0; sx < w; sx++) { seed(sx, 0); seed(sx, h - 1); }
+    for (var sy = 0; sy < h; sy++) { seed(0, sy); seed(w - 1, sy); }
+    while (stack.length) {
+      var p = stack.pop();
+      px[p * 4 + 3] = 0; // border-connected background -> transparent
+      var cx = p % w, cy = (p / w) | 0;
+      if (cx > 0) seed(cx - 1, cy);
+      if (cx < w - 1) seed(cx + 1, cy);
+      if (cy > 0) seed(cx, cy - 1);
+      if (cy < h - 1) seed(cx, cy + 1);
+    }
+    // Feather the 1px rim so the keyed edge leaves no hard halo, and
+    // measure the surviving figure's bounds.
+    var minX = w, maxX = -1, minY = h, maxY = -1;
+    for (var q = 0; q < w * h; q++) {
+      if (seen[q]) continue; // background
+      var i = q * 4;
+      var qx = q % w, qy = (q / w) | 0;
+      var rim = (qx > 0 && seen[q - 1]) || (qx < w - 1 && seen[q + 1]) ||
+                (qy > 0 && seen[q - w]) || (qy < h - 1 && seen[q + w]);
+      if (rim) {
+        var mn = Math.min(px[i], px[i + 1], px[i + 2]);
+        if (mn > 205) {
+          px[i + 3] = Math.max(0, Math.min(255, Math.round((245 - mn) / 40 * 255)));
+        }
+      }
+      if (px[i + 3] > 24) {
+        if (qx < minX) minX = qx;
+        if (qx > maxX) maxX = qx;
+        if (qy < minY) minY = qy;
+        if (qy > maxY) maxY = qy;
+      }
+    }
+    if (maxY < 0) return null;
+    c.putImageData(data, 0, 0);
+    return {
+      canvas: cv, cx: (minX + maxX) / 2, feetY: maxY,
+      figW: maxX - minX + 1, figH: maxY - minY + 1, w: w, h: h,
+    };
+  }
+
+  (function loadHazardSprites() {
+    for (var key in HAZARD_SPRITES) {
+      (function (spec) {
+        var done = 0, ok = true;
+        spec.files.forEach(function (file, idx) {
+          var img = new Image();
+          img.onload = function () {
+            var f = keyHazardFrame(img);
+            if (f) spec.frames[idx] = f; else ok = false;
+            if (++done === spec.files.length) {
+              spec.ready = ok && spec.frames.length === spec.files.length;
+            }
+          };
+          img.onerror = function () {
+            ok = false;
+            if (++done === spec.files.length) spec.ready = false;
+          };
+          img.src = 'images/hazards/' + file;
+        });
+      })(HAZARD_SPRITES[key]);
+    }
+  })();
+
+  // ---------------------------------------------------------------------
   // Fixed scenery — obstacles placed at regular intervals along the
   // route, identical every run (no spawning, no cleanup: positions are
   // computed from distance on demand). A new scenery type is a config
@@ -3074,6 +3189,25 @@
     ctx.fill();
   }
 
+  // Draw an animated hazard sprite, foot-anchored at (x, feetY) and
+  // scaled so the figure stands `screenH` px tall. Each frame is placed
+  // by its own measured foot point / centre so she stays planted while
+  // the legs cycle. `animT` (the hazard's age in seconds) drives the
+  // frame swap; `phase` offsets it so a crowd doesn't step in lockstep.
+  function drawHazardSprite(spec, x, feetY, screenH, animT, phase) {
+    var n = spec.frames.length;
+    var idx = ((Math.floor(animT / HAZARD_FRAME_SECS + phase) % n) + n) % n;
+    var f = spec.frames[idx];
+    var scale = screenH / f.figH; // source px -> screen px
+    // soft contact shadow so she reads as standing on the promenade
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.beginPath();
+    ctx.ellipse(x, feetY, f.figW * scale * 0.5, screenH * 0.05, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.drawImage(f.canvas, x - f.cx * scale, feetY - f.feetY * scale,
+      f.w * scale, f.h * scale);
+  }
+
   function drawHazard(h, m) {
     var cfg = h.cfg;
 
@@ -3343,7 +3477,18 @@
       return;
     }
 
-    // Pedestrian: the plain, unhurried default — round body, flat cap
+    // Pedestrian: real 2-frame walk-cycle sprite (the hazard-art proof of
+    // concept). The frame swap animates the legs; the drift/positioning
+    // above still places her. Feet anchor at (x2, y2), figure sized to the
+    // same footprint the placeholder used. `h.u0` (stable per hazard) just
+    // desyncs each pedestrian's step so they don't march in lockstep.
+    var ped = HAZARD_SPRITES.pedestrian;
+    if (ped.ready) {
+      drawHazardSprite(ped, x2, y2, w2 * ped.heightMul, h.age, h.u0);
+      return;
+    }
+    // Fallback until the frames have loaded/keyed: the plain, unhurried
+    // default — round body, flat cap.
     drawFigure(x2, y2, w2, w2 * 1.5, cfg.colour);
     ctx.fillStyle = '#5a4a3a';
     ctx.beginPath();
