@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.35.0';
+  var VERSION = '0.36.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -378,15 +378,27 @@
     { id: 'tikiTumbleSurvivor', name: 'Tiki Tumble Survivor',
       desc: 'Take a Tiki Tumble and still make it to the end.', secret: false,
       image: 'images/achievements/tiki-tumble.png' },
+    // NOTE: these two have artwork + catalogue entries but no unlock
+    // trigger wired yet — they stay locked until their trigger logic is
+    // added in a future pass (out of scope: this task only adds imagery).
+    { id: 'fastestSoloWalk', name: 'Fastest Solo Walk',
+      desc: 'Set your best time walking solo — no squad, just you.', secret: false,
+      image: 'images/achievements/hi-speed.png' },
+    { id: 'findAllHidden', name: 'Find All Hidden Features',
+      desc: 'Discover every hidden feature Death March is hiding.', secret: false,
+      image: 'images/achievements/all-hidden.png' },
     { id: 'philFirstToBar', name: "No way! Phil's first to the bar",
       desc: 'Playing as Phil, reach Daytona by the proper finish.', secret: true,
       image: 'images/achievements/phil-bar.png' },
     { id: 'tatTrifecta', name: 'Tat Trifecta',
-      desc: 'Deck the squad in shades, hat AND chain in a single walk.', secret: true },
+      desc: 'Deck the squad in shades, hat AND chain in a single walk.', secret: true,
+      image: 'images/achievements/tat-trifecta.png' },
     { id: 'closeCall', name: 'Close Call',
-      desc: 'Get Skidz to the portaloo in the nick of time.', secret: true },
+      desc: 'Get Skidz to the portaloo in the nick of time.', secret: true,
+      image: 'images/achievements/close-call.png' },
     { id: 'sharingTheLove', name: 'Sharing the Love',
-      desc: 'Carry a rose into the drunk lads and share it round.', secret: true },
+      desc: 'Carry a rose into the drunk lads and share it round.', secret: true,
+      image: 'images/achievements/sharing-the-love.png' },
     { id: 'bridesBouquet', name: "Bride's Bouquet",
       desc: 'Deliver a rose to the bride on her hen do.', secret: true,
       image: 'images/achievements/brides-bouquet.png' },
@@ -2125,7 +2137,7 @@
     else unlockWithImage('chainReaction', 'Chain Reaction');
     if (squadItems.shades && squadItems.hat && squadItems.chain) {
       // SECRET: the full set in a single run
-      unlockAchievement('tatTrifecta', 'Tat Trifecta', true);
+      unlockWithImage('tatTrifecta', 'Tat Trifecta', true);
     }
     notify('Looky looky! +' + LOOKY_POINTS);
   }
@@ -2186,7 +2198,7 @@
     h.harmless = true;
     h.ladsHaveRoses = true;
     roses -= 1;
-    unlockAchievement('sharingTheLove', 'Sharing the Love', true);
+    unlockWithImage('sharingTheLove', 'Sharing the Love', true);
   }
 
   // ---------------------------------------------------------------------
@@ -2553,7 +2565,7 @@
           showMessage(leadChar === 'skidz'
             ? "I shouldn't shit myself before Daytona now."
             : 'Skidz you better use the loo before we go any further.');
-          unlockAchievement('closeCall', 'Close Call', true);
+          unlockWithImage('closeCall', 'Close Call', true);
         } else {
           drunk = Math.max(0, drunk - PORTALOO_SOBER);
           showMessage('Sweet relief — sobering up.');
