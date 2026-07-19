@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.29.0';
+  var VERSION = '0.30.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -320,6 +320,12 @@
   var streak = 0;              // consecutive hazards survived since a stumble
   var multUntil = 0;           // hen-bonus points multiplier active until (ms)
   var roses = 0;               // carried roses from the rose seller
+
+  // Rose HUD icon — a small transparent illustration used on the
+  // carried-rose indicator. Drawn once loaded; the HUD falls back to the
+  // old text chip until it is.
+  var roseIcon = new Image();
+  roseIcon.src = 'images/icons/rose-icon.png';
 
   // Wares bought from the looky looky men this run — each one appears on
   // every avatar in the squad row when collected
@@ -1212,7 +1218,7 @@
   var confirmTextEl = document.getElementById('confirm-text');
   var confirmOkBtn = document.getElementById('confirm-ok');
   var confirmBackBtn = document.getElementById('confirm-back');
-  var pendingConfirm = null; // { kind: 'lead'|'squad', key, action }
+  var pendingConfirm = null; // { key } of the lead awaiting confirmation
 
   function showSelectConfirm(text) {
     if (confirmTextEl) confirmTextEl.textContent = text;
@@ -1223,15 +1229,11 @@
     if (selectConfirm) selectConfirm.classList.add('hidden');
   }
 
+  // Only the lead carousel confirms — the squad carousel toggles directly
+  // (the team box is its confirmation).
   function askLeadConfirm(key) {
-    pendingConfirm = { kind: 'lead', key: key };
+    pendingConfirm = { key: key };
     showSelectConfirm('Play as ' + ROSTER[key].name + '?');
-  }
-  function askSquadConfirm(key) {
-    var adding = !mateSel[key];
-    pendingConfirm = { kind: 'squad', key: key, action: adding ? 'add' : 'remove' };
-    showSelectConfirm((adding ? 'Add ' : 'Remove ') + ROSTER[key].name +
-      (adding ? ' to your squad?' : ' from your squad?'));
   }
 
   if (selectConfirm) {
@@ -1243,16 +1245,11 @@
       e.stopPropagation();
       var pc = pendingConfirm;
       if (!pc) { hideSelectConfirm(); return; }
-      if (pc.kind === 'lead') {
-        leadChar = pc.key;
-        if (mateSel[pc.key]) mateSel[pc.key] = false; // can't walk with yourself
-        rebuildSquad(true);   // squad carousel now excludes the new lead
-        markLeadLocked();
-        renderTeam();
-      } else {
-        mateSel[pc.key] = (pc.action === 'add');
-        refreshSelection();
-      }
+      leadChar = pc.key;
+      if (mateSel[pc.key]) mateSel[pc.key] = false; // can't walk with yourself
+      rebuildSquad(true);   // squad carousel now excludes the new lead
+      markLeadLocked();
+      renderTeam();
       hideSelectConfirm();
     });
   }
@@ -1298,7 +1295,10 @@
       onChange: function () { /* browsing only — no state change */ },
       onSelect: function (a) {
         if (!a || !a.key) return;
-        askSquadConfirm(a.key); // add/remove needs confirming
+        // Direct toggle — no confirm popup. The team box updating live
+        // (and the card's locked-in gold ring) is enough feedback.
+        mateSel[a.key] = !mateSel[a.key];
+        refreshSelection();
       }
     });
     if (quiet) {
@@ -3752,15 +3752,38 @@
     ctx.fillStyle = streak > 0 ? '#7fd069' : 'rgba(255, 255, 255, 0.45)';
     ctx.fillText('STREAK ' + streak, W - 14, rowMid);
 
-    // Carrying a rose: an unmissable chip in the middle of the row
+    // Carrying a rose: the rose icon in the middle of the row, on a small
+    // dark pill so it stays legible over any background. Falls back to the
+    // old text chip until the image has loaded.
     if (roses > 0) {
-      ctx.fillStyle = '#ff4d6d';
-      roundRect(W / 2 - 38, rowMid - 8, 76, 15, 7);
-      ctx.fill();
-      ctx.font = 'bold 10px "DM Mono", monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText('ROSE' + (roses > 1 ? ' x' + roses : ''), W / 2, rowMid);
+      var haveIcon = roseIcon.complete && roseIcon.naturalWidth > 0;
+      if (haveIcon) {
+        var riN = 20;                              // icon box, px
+        var countTxt = roses > 1 ? 'x' + roses : '';
+        ctx.font = 'bold 11px "DM Mono", monospace';
+        var cw = countTxt ? ctx.measureText(countTxt).width + 4 : 0;
+        var padX = 7;
+        var pillW = riN + cw + padX * 2;
+        var pillX = W / 2 - pillW / 2;
+        ctx.fillStyle = 'rgba(10, 22, 40, 0.85)';  // dark backing for contrast
+        roundRect(pillX, rowMid - riN / 2 - 1, pillW, riN + 2, (riN + 2) / 2);
+        ctx.fill();
+        ctx.drawImage(roseIcon, pillX + padX, rowMid - riN / 2, riN, riN);
+        if (countTxt) {
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#ff4d6d';
+          ctx.fillText(countTxt, pillX + padX + riN + 4, rowMid);
+        }
+      } else {
+        ctx.fillStyle = '#ff4d6d';
+        roundRect(W / 2 - 38, rowMid - 8, 76, 15, 7);
+        ctx.fill();
+        ctx.font = 'bold 10px "DM Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('ROSE' + (roses > 1 ? ' x' + roses : ''), W / 2, rowMid);
+      }
     }
 
     // Transient notice line under the HUD
