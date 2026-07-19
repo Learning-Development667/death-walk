@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.36.0';
+  var VERSION = '0.37.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -203,6 +203,7 @@
     playerU = 0.07;
     targetU = 0.07;
     notify('TIKI TUMBLE! +' + TUMBLE_PENALTY + 's', 3200);
+    markHidden('tikiTumble');
   }
 
   // ---------------------------------------------------------------------
@@ -482,6 +483,58 @@
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Hidden-features tracker — powers the "Find All Hidden Features"
+  // achievement. Each listed feature is marked "discovered" (persisted per
+  // device owner) the first time it fires; once every id in the list has
+  // been discovered — across any number of runs — the achievement unlocks.
+  // Adding a future hidden feature is just one more id here plus a
+  // markHidden() call at its trigger, no rebuild.
+  // ---------------------------------------------------------------------
+  var HIDDEN_FEATURES = [
+    'tikiTumble', 'steveIceCream', 'island', 'chipShop',
+    'bridesBouquet', 'sharingTheLove', 'leeRose',
+  ];
+  var HIDDEN_STORE_KEY = 'deathMarchHidden';
+
+  function loadHiddenAll() {
+    try { return JSON.parse(localStorage.getItem(HIDDEN_STORE_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function ownerHidden() {
+    if (!deviceOwner) return {};
+    return loadHiddenAll()[deviceOwner.key] || {};
+  }
+  function markHidden(featureId) {
+    if (!deviceOwner) return;
+    var all = loadHiddenAll();
+    var mine = all[deviceOwner.key] || {};
+    if (!mine[featureId]) {
+      mine[featureId] = true;
+      all[deviceOwner.key] = mine;
+      try { localStorage.setItem(HIDDEN_STORE_KEY, JSON.stringify(all)); } catch (e) {}
+    }
+    if (HIDDEN_FEATURES.every(function (f) { return mine[f]; })) {
+      unlockWithImage('findAllHidden', 'Find All Hidden Features');
+    }
+  }
+
+  // Fastest solo Classic completion time — persisted per owner as raw
+  // seconds (a separate stat for a future High Scores page, not the
+  // achievement flag). Keeps the minimum across runs.
+  var SOLO_BEST_KEY = 'deathMarchSoloBest';
+  function recordSoloBest(timeSec) {
+    if (!deviceOwner) return;
+    try {
+      var all = JSON.parse(localStorage.getItem(SOLO_BEST_KEY)) || {};
+      var cur = all[deviceOwner.key];
+      if (typeof cur !== 'number' || timeSec < cur) {
+        all[deviceOwner.key] = timeSec;
+        localStorage.setItem(SOLO_BEST_KEY, JSON.stringify(all));
+      }
+    } catch (e) {}
+  }
+
   function scoreMult() {
     return frameNow < multUntil ? CHAT_MULT : 1;
   }
@@ -756,6 +809,16 @@
     if (tumbleCount > 0) {
       unlockWithImage('tikiTumbleSurvivor', 'Tiki Tumble Survivor');
     }
+
+    // A solo (no mates) Classic finish through the proper Daytona doorway:
+    // keep the best time (raw, for a future High Scores page) and unlock
+    // Fastest Solo Walk on the first such finish.
+    if (ending === 'daytona' && gameMode === MODE_CLASSIC && squad.length === 0) {
+      recordSoloBest(elapsed);
+      unlockWithImage('fastestSoloWalk', 'Fastest Solo Walk');
+    }
+    // Reaching the chip-shop secret ending counts as a hidden feature.
+    if (ending === 'chips') markHidden('chipShop');
 
     endTitleEl.innerHTML =
       ending === 'chips' ? 'BOUGHT EVERYONE<br>CHIPS' :
@@ -2119,6 +2182,7 @@
       // Lee's two-panel cutscene (tap to advance), timer frozen like the
       // other comics. The carried-rose grant below is unchanged.
       queueLeeRoseComic();
+      markHidden('leeRose');
     }
     roses += 1;
     notify('ROSE COLLECTED — you are carrying a rose', 4200);
@@ -2151,7 +2215,10 @@
   function henBonus(h) {
     h.harmless = true; // one outcome per group, and no stumble after
     var delivered = h.bride && roses > 0;
-    if (delivered) roses -= 1; // the bride keeps her bouquet
+    if (delivered) {
+      roses -= 1; // the bride keeps her bouquet
+      markHidden('bridesBouquet');
+    }
 
     if (SQUAD_HAS_ADAM) {
       // TEMP Adam flavour until Phase 4 character select: invincibility
@@ -2199,6 +2266,7 @@
     h.ladsHaveRoses = true;
     roses -= 1;
     unlockWithImage('sharingTheLove', 'Sharing the Love', true);
+    markHidden('sharingTheLove');
   }
 
   // ---------------------------------------------------------------------
@@ -2533,6 +2601,7 @@
   function triggerIsland() {
     if (islandUsed) return;
     islandUsed = true;
+    markHidden('island'); // any of the three variants counts
     if (leadChar === 'robby') {
       showMessage('I think I can swim that');
       queueIslandComic();
@@ -2588,6 +2657,7 @@
           // timer frozen while it plays, like the island comic.
           drunk = Math.max(0, drunk - STEVE_BOOST);
           queueSteveComic();
+          markHidden('steveIceCream'); // the full interlude only, not the absent popup
         } else {
           // Steve's not with you — you bump into him outside, ordering
           drunk = Math.max(0, drunk - STEVE_BOOST_SMALL);
