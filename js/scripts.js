@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.33.0';
+  var VERSION = '0.34.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -364,17 +364,21 @@
   // ---------------------------------------------------------------------
   var ACHIEVEMENT_DEFS = [
     { id: 'shadyBusiness', name: 'Shady Business',
-      desc: 'Grab a pair of shades off a looky looky man.', secret: false },
+      desc: 'Grab a pair of shades off a looky looky man.', secret: false,
+      image: 'images/achievements/looky-sunglasses.png' },
     { id: 'hatsOff', name: 'Hats Off',
-      desc: 'Pick up a knock-off hat from a street seller.', secret: false },
+      desc: 'Pick up a knock-off hat from a street seller.', secret: false,
+      image: 'images/achievements/looky-hats.png' },
     { id: 'chainReaction', name: 'Chain Reaction',
-      desc: 'Bag some gold bling from a chain seller.', secret: false },
+      desc: 'Bag some gold bling from a chain seller.', secret: false,
+      image: 'images/achievements/looky-chains.png' },
     { id: 'nobodyLeftBehind', name: 'Nobody Left Behind',
       desc: 'Reach the finish with your whole squad still standing.', secret: false },
     { id: 'tikiTumbleSurvivor', name: 'Tiki Tumble Survivor',
       desc: 'Take a Tiki Tumble and still make it to the end.', secret: false },
     { id: 'philFirstToBar', name: "No way! Phil's first to the bar",
-      desc: 'Playing as Phil, reach Daytona by the proper finish.', secret: true },
+      desc: 'Playing as Phil, reach Daytona by the proper finish.', secret: true,
+      image: 'images/achievements/phil-bar.png' },
     { id: 'tatTrifecta', name: 'Tat Trifecta',
       desc: 'Deck the squad in shades, hat AND chain in a single walk.', secret: true },
     { id: 'closeCall', name: 'Close Call',
@@ -441,12 +445,27 @@
   // `important` routes the unlock through the pause overlay — used for
   // the secret story-beat achievements; ordinary ones stay ambient. The
   // unlock is persisted against the device owner either way.
+  // Returns true only on the first-ever unlock (the locked -> unlocked
+  // transition); false if it was already owned. Callers use this to fire
+  // a one-time unlock moment without re-triggering on repeat encounters.
   function unlockAchievement(id, label, important) {
-    if (achievements[id]) return;
+    if (achievements[id]) return false;
     achievements[id] = true;
     recordAchievement(id);
     if (important) showMessage('ACHIEVEMENT UNLOCKED: ' + label);
     else notify('ACHIEVEMENT: ' + label);
+    return true;
+  }
+
+  // Unlock and, only on the genuine first unlock, show the achievement's
+  // own image via the shared pause overlay — so the moment plays exactly
+  // once ever, never again on subsequent purchases/finishes.
+  function unlockWithImage(id, label, important) {
+    if (!unlockAchievement(id, label, important)) return;
+    var def = ACHIEVEMENT_MAP[id];
+    if (def && def.image) {
+      queuePhotoOverlay({ image: def.image, caption: def.name });
+    }
   }
 
   function scoreMult() {
@@ -734,7 +753,7 @@
     // one-off achievement the first time it happens.
     var philDaytona = (ending === 'daytona' && leadChar === 'phil');
     if (philDaytona) {
-      unlockAchievement('philFirstToBar', "No way! Phil's first to the bar");
+      unlockWithImage('philFirstToBar', "No way! Phil's first to the bar");
     }
     endMsgEl.textContent =
       ending === 'oldtown' ? OLD_TOWN_MSG :
@@ -2099,9 +2118,9 @@
     drunk = Math.max(0, drunk - SWAGGER_LOOKY);
     addScore(LOOKY_POINTS);
     squadItems[h.wares] = true;
-    if (h.wares === 'shades') unlockAchievement('shadyBusiness', 'Shady Business');
-    else if (h.wares === 'hat') unlockAchievement('hatsOff', 'Hats Off');
-    else unlockAchievement('chainReaction', 'Chain Reaction');
+    if (h.wares === 'shades') unlockWithImage('shadyBusiness', 'Shady Business');
+    else if (h.wares === 'hat') unlockWithImage('hatsOff', 'Hats Off');
+    else unlockWithImage('chainReaction', 'Chain Reaction');
     if (squadItems.shades && squadItems.hat && squadItems.chain) {
       // SECRET: the full set in a single run
       unlockAchievement('tatTrifecta', 'Tat Trifecta', true);
