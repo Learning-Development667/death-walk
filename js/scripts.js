@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.24.0';
+  var VERSION = '0.25.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1174,19 +1174,89 @@
     }
   }
 
-  // Mark squad-carousel cards whose character is currently in the team, so
-  // an already-picked mate reads gold even before you open the team box.
+  // Mark confirmed squad-carousel cards with the "locked in" visual so a
+  // chosen mate reads as locked whether or not it's the centred card.
   function markPicked() {
     if (!squadCarousel) return;
     squadCarousel.cards.forEach(function (card, i) {
       var a = squadCarousel.avatars[i];
-      card.classList.toggle('dm-picked', !!(a && mateSel[a.key]));
+      card.classList.toggle('dm-locked', !!(a && mateSel[a.key]));
+    });
+  }
+
+  // Mark the confirmed lead's card with the same "locked in" visual. The
+  // lead carousel isn't rebuilt on selection, so this class simply sticks
+  // to whichever card is the current leadChar across swipes.
+  function markLeadLocked() {
+    if (!leadCarousel) return;
+    leadCarousel.cards.forEach(function (card, i) {
+      var a = leadCarousel.avatars[i];
+      card.classList.toggle('dm-locked', !!(a && a.key === leadChar));
     });
   }
 
   function refreshSelection() {
     markPicked();
     renderTeam();
+  }
+
+  // ---- Selection confirmation modal -----------------------------------
+  // Tapping a centred cameo no longer changes state directly — it raises a
+  // CONFIRM/BACK prompt, and only CONFIRM commits. pendingConfirm holds
+  // what's awaiting the decision.
+  var selectConfirm = document.getElementById('select-confirm');
+  var confirmTextEl = document.getElementById('confirm-text');
+  var confirmOkBtn = document.getElementById('confirm-ok');
+  var confirmBackBtn = document.getElementById('confirm-back');
+  var pendingConfirm = null; // { kind: 'lead'|'squad', key, action }
+
+  function showSelectConfirm(text) {
+    if (confirmTextEl) confirmTextEl.textContent = text;
+    if (selectConfirm) selectConfirm.classList.remove('hidden');
+  }
+  function hideSelectConfirm() {
+    pendingConfirm = null;
+    if (selectConfirm) selectConfirm.classList.add('hidden');
+  }
+
+  function askLeadConfirm(key) {
+    pendingConfirm = { kind: 'lead', key: key };
+    showSelectConfirm('Play as ' + ROSTER[key].name + '?');
+  }
+  function askSquadConfirm(key) {
+    var adding = !mateSel[key];
+    pendingConfirm = { kind: 'squad', key: key, action: adding ? 'add' : 'remove' };
+    showSelectConfirm((adding ? 'Add ' : 'Remove ') + ROSTER[key].name +
+      (adding ? ' to your squad?' : ' from your squad?'));
+  }
+
+  if (selectConfirm) {
+    // Never let a tap in here reach the tap-anywhere-to-start handler.
+    selectConfirm.addEventListener('click', function (e) { e.stopPropagation(); });
+  }
+  if (confirmOkBtn) {
+    confirmOkBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var pc = pendingConfirm;
+      if (!pc) { hideSelectConfirm(); return; }
+      if (pc.kind === 'lead') {
+        leadChar = pc.key;
+        if (mateSel[pc.key]) mateSel[pc.key] = false; // can't walk with yourself
+        rebuildSquad(true);   // squad carousel now excludes the new lead
+        markLeadLocked();
+        renderTeam();
+      } else {
+        mateSel[pc.key] = (pc.action === 'add');
+        refreshSelection();
+      }
+      hideSelectConfirm();
+    });
+  }
+  if (confirmBackBtn) {
+    confirmBackBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      hideSelectConfirm();
+    });
   }
 
   // A photo that 404s (casing drift, a not-yet-uploaded file) is swapped
@@ -1224,8 +1294,7 @@
       onChange: function () { /* browsing only — no state change */ },
       onSelect: function (a) {
         if (!a || !a.key) return;
-        mateSel[a.key] = !mateSel[a.key];
-        refreshSelection();
+        askSquadConfirm(a.key); // add/remove needs confirming
       }
     });
     if (quiet) {
@@ -1250,18 +1319,19 @@
       mount: leadMount,
       avatars: ROSTER_ORDER.map(avatarSpec),
       startName: ROSTER[leadChar].name,
-      onChange: function (a) {
+      // Browsing (swiping) no longer picks the lead — the centred card just
+      // shows the browsing laser ring. Tapping the centred cameo raises a
+      // confirm; only that commits leadChar.
+      onChange: function () { /* browsing only — no state change */ },
+      onSelect: function (a) {
         if (!a || !a.key) return;
-        leadChar = a.key;
-        if (mateSel[a.key]) mateSel[a.key] = false; // can't walk with yourself
-        rebuildSquad(true);
-        renderTeam();
-      },
-      onSelect: function () { /* centre already is the lead — nothing to confirm */ }
+        askLeadConfirm(a.key);
+      }
     });
     guardPhotos(leadCarousel);
 
     rebuildSquad(false);
+    markLeadLocked(); // the default lead starts locked in
     renderTeam();
   }
 

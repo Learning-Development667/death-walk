@@ -492,9 +492,60 @@
       touch-action: manipulation;
     }
 
-    /* A squad member already in the team reads gold, name and ring. */
-    .dm-card.dm-picked .dm-name { color: #ffd166; }
-    .dm-card.dm-picked .dm-ring::before { border-color: #ffd166; }
+    /* "Locked in" — a genuinely CONFIRMED card (the chosen lead, or a
+       confirmed squad member). Deliberately distinct from the browsing
+       laser comet ring: a steady solid gold ring plus a checkmark badge,
+       shown whether or not the card is currently centred. Overrides the
+       .is-active comet so a confirmed-and-centred card reads as locked,
+       not browsing. */
+    .dm-card.dm-locked .dm-name { color: #ffd166; }
+    .dm-card.dm-locked .dm-ring::before {
+      border: 3px solid #ffd166 !important;
+      background: none !important;
+      padding: 0 !important;
+      -webkit-mask: none !important;
+      mask: none !important;
+      animation: none !important;
+    }
+    .dm-card.dm-locked .dm-ring::after {
+      content: '✓';
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #ffd166;
+      color: #0a1628;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 22px;
+      text-align: center;
+      z-index: 4;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+    }
+
+    /* Selection confirmation modal. */
+    .confirm-card {
+      background: rgba(10, 22, 40, 0.96);
+      border: 2px solid #ffd166;
+      border-radius: 16px;
+      padding: 26px 24px 22px;
+      max-width: 84vw;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-shadow: 0 10px 50px rgba(0, 0, 0, 0.6);
+    }
+    .confirm-text {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(28px, 8vw, 42px);
+      letter-spacing: 0.03em;
+      color: #ffffff;
+      text-align: center;
+      line-height: 1.05;
+    }
   </style>
 </head>
 <body>
@@ -541,6 +592,18 @@
     </div>
     <button class="ach-link" id="open-achievements">🏆 ACHIEVEMENTS</button>
     <button class="owner-link" id="owner-change"></button>
+  </div>
+
+  <!-- Character-selection confirmation (lead + squad). Shown over the
+       start screen; only CONFIRM changes the selection state. -->
+  <div id="select-confirm" class="overlay hidden">
+    <div class="confirm-card">
+      <div class="confirm-text" id="confirm-text"></div>
+      <div class="hand-row">
+        <button class="btn" id="confirm-back">BACK</button>
+        <button class="btn" id="confirm-ok">CONFIRM</button>
+      </div>
+    </div>
   </div>
 
   <div id="achievements-screen" class="overlay hidden ach-scroll">
