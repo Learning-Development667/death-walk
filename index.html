@@ -301,6 +301,20 @@
       padding: 14px 26px;
     }
 
+    /* Persistent Endless best — under the mode chips and on the end screen */
+    #endless-best {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      color: #ffd166;
+      margin-top: 12px;
+      min-height: 14px;
+    }
+
+    #end-best {
+      color: #ffd166;
+    }
+
     .version {
       position: fixed;
       bottom: calc(6px + env(safe-area-inset-bottom));
@@ -368,6 +382,7 @@
       <button class="mate lead" id="mode-classic">CLASSIC</button>
       <button class="mate" id="mode-endless">ENDLESS</button>
     </div>
+    <div id="endless-best"></div>
     <div class="prompt small">CHOOSE YOUR THUMB — TAP TO START</div>
     <div class="hand-row">
       <button class="btn" id="hand-left">LEFTY</button>
@@ -380,7 +395,11 @@
     <div class="subtitle" id="end-msg"></div>
     <div class="end-time" id="end-time">0.0s</div>
     <div class="subtitle" id="end-score"></div>
-    <button class="btn" id="walk-again">WALK AGAIN</button>
+    <div class="subtitle" id="end-best"></div>
+    <div class="hand-row">
+      <button class="btn" id="copy-score" style="display: none;">COPY SCORE</button>
+      <button class="btn" id="walk-again">WALK AGAIN</button>
+    </div>
   </div>
 
   <div id="msg-overlay" class="overlay hidden">

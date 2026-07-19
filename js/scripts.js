@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.20.0';
+  var VERSION = '0.21.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -360,6 +360,36 @@
   var endMsgEl = document.getElementById('end-msg');
   var endTimeEl = document.getElementById('end-time');
   var endScoreEl = document.getElementById('end-score');
+  var endBestEl = document.getElementById('end-best');
+  var copyScoreBtn = document.getElementById('copy-score');
+  var endlessBestEl = document.getElementById('endless-best');
+
+  // ---------------------------------------------------------------------
+  // Endless best — persisted locally so it survives between sessions.
+  // Distance is the headline stat (it's what Endless is about); the score
+  // rides along for the share text. localStorage can be unavailable
+  // (private browsing) so every touch is wrapped.
+  // ---------------------------------------------------------------------
+  var BEST_KEY = 'deathMarchEndlessBest';
+
+  function loadBest() {
+    try {
+      var v = JSON.parse(localStorage.getItem(BEST_KEY));
+      return (v && typeof v.dist === 'number') ? v : null;
+    } catch (e) { return null; }
+  }
+
+  function saveBest(v) {
+    try { localStorage.setItem(BEST_KEY, JSON.stringify(v)); } catch (e) {}
+  }
+
+  function refreshBestOnTitle() {
+    if (!endlessBestEl) return;
+    var best = loadBest();
+    endlessBestEl.textContent = best
+      ? 'ENDLESS BEST: ' + best.dist + 'M'
+      : '';
+  }
   var versionEl = document.getElementById('version');
   var walkAgainBtn = document.getElementById('walk-again');
 
@@ -601,7 +631,94 @@
       '';
     endTimeEl.textContent = elapsed.toFixed(1) + 's';
     endScoreEl.textContent = score + ' PTS';
+
+    // Endless extras: the persistent best and the share button. Classic
+    // endings show neither.
+    if (ending === 'endless') {
+      var dist = Math.floor(distance);
+      var best = loadBest();
+      var isNewBest = !best || dist > best.dist;
+      if (isNewBest) saveBest({ dist: dist, score: score });
+      if (endBestEl) {
+        endBestEl.textContent = isNewBest
+          ? 'NEW BEST!'
+          : 'YOUR BEST: ' + best.dist + 'm';
+      }
+      lastShare = buildShareText(dist, score, isNewBest);
+      if (copyScoreBtn) {
+        copyScoreBtn.style.display = '';
+        copyScoreBtn.textContent = 'COPY SCORE';
+      }
+    } else {
+      if (endBestEl) endBestEl.textContent = '';
+      if (copyScoreBtn) copyScoreBtn.style.display = 'none';
+    }
+
     endScreen.classList.remove('hidden');
+  }
+
+  // ---------------------------------------------------------------------
+  // Shareable run summary — built at finish, copied on demand. Written
+  // to paste straight into the group chat.
+  // ---------------------------------------------------------------------
+  var lastShare = '';
+
+  function buildShareText(dist, pts, isNewBest) {
+    var lead = (ROSTER[leadChar] && ROSTER[leadChar].name) || 'someone';
+    var lines = [
+      '🍺💀 DEATH MARCH — ENDLESS',
+      'Made it ' + dist + 'm down the prom as ' + lead +
+        ' before the beers ran out.',
+    ];
+    if (squad.length === 1) {
+      lines.push(matesAlive() === 1
+        ? squad[0].name + ' still standing. Miracle.'
+        : squad[0].name + ' is on a bench somewhere.');
+    } else if (squad.length > 1) {
+      var standing = matesAlive();
+      lines.push(standing === squad.length
+        ? 'All ' + squad.length + ' mates still standing. Miracle.'
+        : standing + ' of ' + squad.length +
+          ' mates still standing. The rest are on benches.');
+    }
+    lines.push(pts + ' PTS.' + (isNewBest ? ' New personal best.' : ''));
+    lines.push('Reckon you’d get further?');
+    return lines.join('\n');
+  }
+
+  function flashCopied(ok) {
+    if (!copyScoreBtn) return;
+    copyScoreBtn.textContent = ok ? 'COPIED!' : 'COPY FAILED';
+    setTimeout(function () { copyScoreBtn.textContent = 'COPY SCORE'; }, 1600);
+  }
+
+  if (copyScoreBtn) {
+    copyScoreBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!lastShare) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(lastShare).then(
+          function () { flashCopied(true); },
+          function () { flashCopied(legacyCopy(lastShare)); }
+        );
+      } else {
+        flashCopied(legacyCopy(lastShare));
+      }
+    });
+  }
+
+  // Fallback for contexts without the async Clipboard API
+  function legacyCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    return ok;
   }
 
   // ---------------------------------------------------------------------
@@ -887,6 +1004,7 @@
     if (modeEndlessBtn) {
       modeEndlessBtn.classList.toggle('lead', gameMode === MODE_ENDLESS);
     }
+    refreshBestOnTitle();
   }
   if (modeClassicBtn) {
     modeClassicBtn.addEventListener('click', function (e) {
@@ -1188,12 +1306,28 @@
   //   weight  relative spawn frequency (matters once there are more)
   //   colour  placeholder silhouette colour
   // ---------------------------------------------------------------------
+  //   endless  only ever spawns in Endless mode (Classic never sees it)
+  //   laneU    fixed lane instead of a random one (the loo hugs the kerb)
+  // The loo's sober-up amount isn't in its config: it reuses the portaloo
+  // stop's PORTALOO_SOBER / _SOBER_SKIDZ values at collection time.
   var PICKUP_TYPES = {
-    beer: { spawn: [45, 80], width: 20, drunk: 1, weight: 1, colour: '#ffc233' },
+    beer:     { spawn: [45, 80], width: 20, drunk: 1, weight: 1, colour: '#ffc233' },
+    // Endless survival set — three sobering tiers, rarer as they get
+    // stronger, tuned so a skilled player can hold a run indefinitely
+    water:    { spawn: [45, 80], width: 18, drunk: -0.8, weight: 0.85,
+                colour: '#5bc8f5', endless: true },
+    iceCream: { spawn: [45, 80], width: 18, drunk: -1.6, weight: 0.4,
+                colour: '#ffd9e8', endless: true },
+    loo:      { spawn: [50, 85], width: 26, drunk: 0, weight: 0.2,
+                colour: '#2d7dd2', laneU: 0.9, endless: true },
   };
 
   var PICKUP_INTERVAL_MIN = 5.5;  // seconds between pickup spawns
   var PICKUP_INTERVAL_MAX = 8.5;
+  // Endless spawns pickups faster — with four types sharing the stream,
+  // beers (the lives) still need to arrive often enough to sustain a run
+  var PICKUP_INTERVAL_MIN_ENDLESS = 4.0;
+  var PICKUP_INTERVAL_MAX_ENDLESS = 6.5;
 
   // Drunk tuning — deliberately surfaced as constants for playtesting.
   // Effects ramp along a controlled curve from sober to the cap and
@@ -1643,24 +1777,59 @@
   // into a pickup collects it (applies its `drunk` delta to the meter)
   // and removes it from the world. No penalty, no invulnerability.
   // ---------------------------------------------------------------------
+  // The pickup pool for the current mode: Classic sees only the beer;
+  // Endless adds the three sobering tiers.
+  function activePickupTypes() {
+    if (gameMode === MODE_ENDLESS) return PICKUP_TYPES;
+    var out = {};
+    for (var key in PICKUP_TYPES) {
+      if (!PICKUP_TYPES[key].endless) out[key] = PICKUP_TYPES[key];
+    }
+    return out;
+  }
+
   function spawnPickup() {
-    var key = weightedPick(PICKUP_TYPES);
-    var cfg = PICKUP_TYPES[key];
+    var types = activePickupTypes();
+    var key = weightedPick(types);
+    var cfg = types[key];
     pickups.push({
       key: key,
       cfg: cfg,
       pickup: true,
       worldZ: distance + cfg.spawn[0] + Math.random() * (cfg.spawn[1] - cfg.spawn[0]),
-      u: 0.1 + Math.random() * 0.8,
+      u: cfg.laneU !== undefined ? cfg.laneU : 0.1 + Math.random() * 0.8,
     });
+  }
+
+  function collectPickup(p) {
+    if (p.key === 'loo') {
+      // The portaloo pickup reuses the portaloo stop's mechanic wholesale,
+      // Skidz bonus included — the biggest sober-up of the three tiers
+      var relief = squadIncludes('skidz') ? PORTALOO_SOBER_SKIDZ : PORTALOO_SOBER;
+      drunk = Math.max(0, drunk - relief);
+      notify('PORTALOO — sweet relief');
+      return;
+    }
+    drunk = Math.max(0, drunk + p.cfg.drunk);
+    if (p.key === 'beer' && gameMode === MODE_ENDLESS && lives < ENDLESS_LIVES) {
+      lives += 1; // a beer back in the hand — one life refilled
+      notify('BEER — back up to ' + lives + (lives === 1 ? ' life' : ' lives'));
+    } else if (p.key === 'water') {
+      notify('WATER — sobering up a touch');
+    } else if (p.key === 'iceCream') {
+      notify('ICE CREAM — head clearing');
+    }
   }
 
   function updatePickups(dt) {
     pickupTimer -= dt;
     if (pickupTimer <= 0) {
       spawnPickup();
-      pickupTimer = PICKUP_INTERVAL_MIN +
-        Math.random() * (PICKUP_INTERVAL_MAX - PICKUP_INTERVAL_MIN);
+      pickupTimer = gameMode === MODE_ENDLESS
+        ? PICKUP_INTERVAL_MIN_ENDLESS +
+          Math.random() * (PICKUP_INTERVAL_MAX_ENDLESS - PICKUP_INTERVAL_MIN_ENDLESS)
+        : PICKUP_INTERVAL_MIN +
+          Math.random() * (PICKUP_INTERVAL_MAX - PICKUP_INTERVAL_MIN);
     }
 
     for (var i = pickups.length - 1; i >= 0; i--) {
@@ -1670,7 +1839,7 @@
         pickups.splice(i, 1); // missed it — gone below the screen
       } else if (Math.abs(m - playerM()) < 0.7 &&
                  overlapsPlayer(p.u, p.cfg.width)) {
-        drunk = Math.max(0, drunk + p.cfg.drunk);
+        collectPickup(p);
         pickups.splice(i, 1); // collected
       }
     }
@@ -2752,6 +2921,60 @@
     ctx.beginPath();
     ctx.ellipse(x, y, w * 0.5, w * 0.16, 0, 0, Math.PI * 2);
     ctx.fill();
+
+    if (p.key === 'water') {
+      // A clear bottle: slim body, darker cap
+      var bh = w * 1.3;
+      ctx.fillStyle = cfg.colour;
+      roundRect(x - w * 0.28, y - bh, w * 0.56, bh, w * 0.16);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'; // label band
+      ctx.fillRect(x - w * 0.28, y - bh * 0.62, w * 0.56, bh * 0.26);
+      ctx.fillStyle = '#1d5fa8'; // cap
+      ctx.fillRect(x - w * 0.14, y - bh - w * 0.18, w * 0.28, w * 0.18);
+      return;
+    }
+
+    if (p.key === 'iceCream') {
+      // A cone with a pink scoop and a flake
+      var ch = w * 0.9;
+      ctx.fillStyle = '#d9a066'; // cone
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.34, y - ch);
+      ctx.lineTo(x + w * 0.34, y - ch);
+      ctx.lineTo(x, y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = cfg.colour; // scoop
+      ctx.beginPath();
+      ctx.arc(x, y - ch, w * 0.42, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#8b5a2b'; // the flake
+      ctx.lineWidth = Math.max(1.5, w * 0.12);
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.12, y - ch - w * 0.3);
+      ctx.lineTo(x + w * 0.3, y - ch - w * 0.72);
+      ctx.stroke();
+      return;
+    }
+
+    if (p.key === 'loo') {
+      // A portaloo, same box as the side-street one, pickup-sized
+      var lh = w * 1.7;
+      ctx.fillStyle = cfg.colour; // cabin
+      roundRect(x - w / 2, y - lh, w, lh, w * 0.08);
+      ctx.fill();
+      ctx.fillStyle = '#1d5fa8'; // roof cap
+      ctx.fillRect(x - w * 0.56, y - lh - w * 0.14, w * 1.12, w * 0.18);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)'; // door outline
+      ctx.lineWidth = Math.max(1, w * 0.05);
+      ctx.strokeRect(x - w * 0.32, y - lh * 0.88, w * 0.64, lh * 0.82);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(x + w * 0.2, y - lh * 0.45, w * 0.05, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
 
     ctx.fillStyle = cfg.colour; // the beer
     roundRect(x - w * 0.4, y - gh, w * 0.8, gh, w * 0.12);
