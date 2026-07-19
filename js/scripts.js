@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.26.0';
+  var VERSION = '0.27.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -356,6 +356,9 @@
     { id: 'bridesBouquet', name: "Bride's Bouquet",
       desc: 'Deliver a rose to the bride on her hen do.', secret: true,
       image: 'images/achievements/brides-bouquet.png' },
+    { id: 'sharkFed', name: 'The Shark Has Fed',
+      desc: 'Meet a hen party with Adam along — the shark has fed, all the little fish are happy.',
+      secret: true, image: 'images/achievements/shark-fed.png' },
   ];
   var ACHIEVEMENT_MAP = {};
   ACHIEVEMENT_DEFS.forEach(function (d) { ACHIEVEMENT_MAP[d.id] = d; });
@@ -2096,6 +2099,7 @@
         image: 'images/achievements/shark-fed.png',
         caption: 'The shark has fed, all the little fish are happy',
       });
+      unlockAchievement('sharkFed', 'The Shark Has Fed', true);
       if (delivered) unlockAchievement('bridesBouquet', "Bride's Bouquet", true);
       return;
     }
