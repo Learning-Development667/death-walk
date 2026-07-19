@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.18.0';
+  var VERSION = '0.19.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -904,23 +904,36 @@
   }
   syncModeUI();
 
-  // Character selection is a Forge-style carousel picker built from the
-  // roster. The lead carousel picks who you play as; the squad carousel
-  // (with the current lead dropped out) toggles who walks with you; the
-  // team box shows the live squad and taps a member back out. The state
-  // it drives — leadChar + mateSel — is exactly what it was before, so
-  // everything downstream (SQUAD_HAS_ADAM, PLAYING_AS_LEE, resetRun's
-  // squad build) is unchanged; only the presentation differs.
-  var leadCarousel = document.getElementById('lead-carousel');
-  var squadCarousel = document.getElementById('squad-carousel');
+  // Character selection — two DMCarousel coverflow pickers plus the team
+  // box, all driving the same state as before: leadChar (who you play as)
+  // and mateSel (who walks with you). The lead carousel's centred cameo IS
+  // the lead; the squad carousel below excludes that lead and toggles a
+  // mate when its centred cameo is tapped; the team box lists the squad
+  // and drops a member when its thumb is tapped. Nothing downstream
+  // changes — resetRun still reads leadChar + mateSel, and SQUAD_HAS_ADAM
+  // / PLAYING_AS_LEE still derive from them at run start.
+  var leadMount = document.getElementById('lead-carousel');
+  var squadMount = document.getElementById('squad-carousel');
   var teamBox = document.getElementById('team-box');
-  var leadCards = {};
-  var squadCards = {};
+  var leadCarousel = null;
+  var squadCarousel = null;
+
+  // Actual on-disk filenames (note Keith's capital K — GitHub Pages is
+  // case-sensitive). Focal point defaults to [50, 30] for every avatar;
+  // per-character focal tuning is a planned follow-up.
+  var AVATAR_FILE = {
+    robby: 'robby.png', lee: 'lee.png', al: 'al.png', keith: 'Keith.png',
+    skidz: 'skidz.png', phil: 'phil.png', adam: 'adam.png',
+    churchy: 'churchy.png', shippy: 'shippy.png', steve: 'steve.png'
+  };
+  function avatarSpec(k) {
+    var spec = { name: ROSTER[k].name, key: k, focus: [50, 30] };
+    if (AVATAR_FILE[k]) spec.src = 'images/avatars/' + AVATAR_FILE[k];
+    return spec;
+  }
 
   // Fill a circular container with a character's photo over a coloured
-  // fallback disc + initial. register=true keeps a late-loading photo
-  // tracked (for cards built once up front); false is for throwaway
-  // thumbnails that are rebuilt on every squad change.
+  // fallback disc + initial (used by the team-box thumbnails).
   function fillFace(container, k, register) {
     container.style.background = ROSTER[k].colour;
     var initial = document.createElement('span');
@@ -940,21 +953,6 @@
     container.appendChild(img);
   }
 
-  function buildCard(k) {
-    var card = document.createElement('button');
-    card.className = 'card';
-    card.type = 'button';
-    var disc = document.createElement('span');
-    disc.className = 'disc';
-    fillFace(disc, k, true);
-    card.appendChild(disc);
-    var name = document.createElement('span');
-    name.className = 'cname';
-    name.textContent = ROSTER[k].name.toUpperCase();
-    card.appendChild(name);
-    return card;
-  }
-
   // Rebuild the team box from the current squad selection.
   function renderTeam() {
     if (!teamBox) return;
@@ -970,12 +968,12 @@
       fillFace(thumb, k, false);
       var rm = document.createElement('span');
       rm.className = 'rm';
-      rm.textContent = '×'; // ×
+      rm.textContent = '×';
       thumb.appendChild(rm);
       thumb.addEventListener('click', function (e) {
         e.stopPropagation();
         mateSel[k] = false;
-        syncSelectionUI();
+        refreshSelection();
       });
       teamBox.appendChild(thumb);
     });
@@ -987,49 +985,95 @@
     }
   }
 
-  function syncSelectionUI() {
-    ROSTER_ORDER.forEach(function (k) {
-      var isLead = (k === leadChar);
-      if (isLead) mateSel[k] = false; // can't walk with yourself
-      if (leadCards[k]) leadCards[k].classList.toggle('lead', isLead);
-      if (squadCards[k]) {
-        squadCards[k].classList.toggle('excluded', isLead);
-        squadCards[k].classList.toggle('picked', !!mateSel[k]);
-      }
+  // Mark squad-carousel cards whose character is currently in the team, so
+  // an already-picked mate reads gold even before you open the team box.
+  function markPicked() {
+    if (!squadCarousel) return;
+    squadCarousel.cards.forEach(function (card, i) {
+      var a = squadCarousel.avatars[i];
+      card.classList.toggle('dm-picked', !!(a && mateSel[a.key]));
     });
+  }
+
+  function refreshSelection() {
+    markPicked();
     renderTeam();
   }
 
-  if (leadCarousel && squadCarousel && teamBox) {
-    // Taps inside the picker must not bubble to the start-screen's
-    // tap-anywhere-to-begin handler, or choosing a character would launch
-    // the run. Each card stops its own event; these guard empty gaps too.
-    [leadCarousel, squadCarousel, teamBox].forEach(function (el) {
+  // A photo that 404s (casing drift, a not-yet-uploaded file) is swapped
+  // for the coloured initial placeholder the component uses when a card
+  // has no src — a missing avatar degrades gracefully, never a broken icon.
+  function guardPhotos(carousel) {
+    if (!carousel || !carousel.track) return;
+    var imgs = carousel.track.querySelectorAll('img.dm-photo');
+    Array.prototype.forEach.call(imgs, function (img) {
+      img.addEventListener('error', function handler() {
+        img.removeEventListener('error', handler);
+        var ph = document.createElement('span');
+        ph.className = 'dm-photo dm-photo--placeholder';
+        ph.textContent = (img.alt || '?').charAt(0).toUpperCase();
+        if (img.parentNode) img.parentNode.replaceChild(ph, img);
+      });
+    });
+  }
+
+  // The squad carousel excludes the current lead, so it is rebuilt whenever
+  // the lead changes. quiet=true skips the entry animation on those
+  // rebuilds so only the very first appearance animates in.
+  function rebuildSquad(quiet) {
+    if (!squadMount) return;
+    var keepName = (squadCarousel && squadCarousel.current()) ? squadCarousel.current().name : null;
+    var specs = ROSTER_ORDER
+      .filter(function (k) { return k !== leadChar; })
+      .map(avatarSpec);
+    squadCarousel = new DMCarousel({
+      mount: squadMount,
+      avatars: specs,
+      startName: keepName || undefined,
+      sizes: { active: 92, near: 62, far: 46 },
+      offsets: { near: 98, far: 124 },
+      onChange: function () { /* browsing only — no state change */ },
+      onSelect: function (a) {
+        if (!a || !a.key) return;
+        mateSel[a.key] = !mateSel[a.key];
+        refreshSelection();
+      }
+    });
+    if (quiet) {
+      squadCarousel.cards.forEach(function (card) {
+        if (card.firstChild) card.firstChild.style.animation = 'none';
+      });
+    }
+    guardPhotos(squadCarousel);
+    markPicked();
+  }
+
+  if (leadMount && squadMount && teamBox && typeof DMCarousel === 'function') {
+    // Taps and swipes inside the pickers must not bubble to the start
+    // screen's tap-anywhere-to-begin handler, or interacting with a
+    // carousel would launch the run. The mount elements survive the
+    // component's innerHTML rebuilds, so one guard each is enough.
+    [leadMount, squadMount, teamBox].forEach(function (el) {
       el.addEventListener('click', function (e) { e.stopPropagation(); });
     });
 
-    ROSTER_ORDER.forEach(function (k) {
-      var lc = buildCard(k);
-      lc.addEventListener('click', function (e) {
-        e.stopPropagation();
-        leadChar = k;
-        syncSelectionUI();
-        lc.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-      });
-      leadCarousel.appendChild(lc);
-      leadCards[k] = lc;
-
-      var sc = buildCard(k);
-      sc.addEventListener('click', function (e) {
-        e.stopPropagation();
-        if (k === leadChar) return;
-        mateSel[k] = !mateSel[k];
-        syncSelectionUI();
-      });
-      squadCarousel.appendChild(sc);
-      squadCards[k] = sc;
+    leadCarousel = new DMCarousel({
+      mount: leadMount,
+      avatars: ROSTER_ORDER.map(avatarSpec),
+      startName: ROSTER[leadChar].name,
+      onChange: function (a) {
+        if (!a || !a.key) return;
+        leadChar = a.key;
+        if (mateSel[a.key]) mateSel[a.key] = false; // can't walk with yourself
+        rebuildSquad(true);
+        renderTeam();
+      },
+      onSelect: function () { /* centre already is the lead — nothing to confirm */ }
     });
-    syncSelectionUI();
+    guardPhotos(leadCarousel);
+
+    rebuildSquad(false);
+    renderTeam();
   }
 
   walkAgainBtn.addEventListener('click', function (e) {

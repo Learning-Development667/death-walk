@@ -206,106 +206,6 @@
       gap: 7px;
     }
 
-    .mate .face {
-      width: 26px;
-      height: 26px;
-      border-radius: 50%;
-      object-fit: cover;
-      object-position: 50% 16%;
-      background: rgba(255, 255, 255, 0.08);
-      flex: none;
-      pointer-events: none;
-    }
-
-    /* ---- Character selection carousels (Forge-style picker) ---------- */
-    .carousel {
-      display: flex;
-      gap: 12px;
-      margin-top: 12px;
-      width: 100%;
-      max-width: 460px;
-      overflow-x: auto;
-      overflow-y: hidden;
-      scroll-snap-type: x proximity;
-      -webkit-overflow-scrolling: touch;
-      padding: 10px 18px 16px;
-      scrollbar-width: none;
-    }
-
-    .carousel::-webkit-scrollbar { display: none; }
-
-    .card {
-      flex: none;
-      scroll-snap-align: center;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 7px;
-      background: transparent;
-      border: none;
-      padding: 0;
-      cursor: pointer;
-      touch-action: manipulation;
-      transition: transform 0.16s ease;
-    }
-
-    .card .disc {
-      position: relative;
-      flex: none; /* keep the square size; absolute children give 0 content height */
-      border-radius: 50%;
-      overflow: hidden;
-      background: rgba(255, 255, 255, 0.08);
-      border: 3px solid transparent;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-      transition: border-color 0.16s ease, box-shadow 0.16s ease;
-    }
-
-    .card .disc img {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: 50% 15%;
-    }
-
-    .card .disc .initial {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: 'Bebas Neue', sans-serif;
-      color: rgba(255, 255, 255, 0.9);
-      letter-spacing: 0.04em;
-    }
-
-    .card .cname {
-      font-family: 'DM Sans', sans-serif;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      color: #8fb4d9;
-      white-space: nowrap;
-    }
-
-    /* Lead carousel — larger discs, gold ring + scale on the chosen lead */
-    .lead-carousel .disc { width: 92px; height: 92px; }
-    .lead-carousel .initial { font-size: 42px; }
-    .lead-carousel .card.lead { transform: scale(1.09); }
-    .lead-carousel .card.lead .disc {
-      border-color: #ffd166;
-      box-shadow: 0 0 0 3px rgba(255, 209, 102, 0.35), 0 8px 20px rgba(0, 0, 0, 0.55);
-    }
-    .lead-carousel .card.lead .cname { color: #ffd166; }
-
-    /* Squad carousel — smaller discs; the current lead is dropped out */
-    .squad-carousel .disc { width: 66px; height: 66px; }
-    .squad-carousel .initial { font-size: 28px; }
-    .squad-carousel .card.excluded { display: none; }
-    .squad-carousel .card.picked .disc { border-color: #8fb4d9; }
-    .squad-carousel .card.picked .cname { color: #ffffff; }
-
     /* Team box — live thumbnails of the chosen squad; tap a thumb to drop */
     .team-box {
       display: flex;
@@ -414,6 +314,42 @@
       color: rgba(255, 255, 255, 0.35);
     }
   </style>
+
+  <!-- Coverflow avatar picker component -->
+  <link rel="stylesheet" href="carousel.css">
+  <style>
+    /* Death March palette over the component's placeholder brand tokens. */
+    :root {
+      --dm-accent:       #ffd166;               /* HUD gold */
+      --dm-accent-2:     #ffe6ad;               /* lighter gold for the laser sweep */
+      --dm-text:         #ffffff;
+      --dm-cameo-backing:#0f1d33;               /* navy panel behind the oval cameos */
+      --dm-ring-idle:    rgba(143, 180, 217, 0.28);
+      --dm-display-font: 'Bebas Neue', sans-serif;
+    }
+
+    /* The start screen is a column flexbox; stop it from shrinking the
+       carousels below their declared height (it would clip the name). */
+    .dm-carousel { flex: none; }
+
+    /* Two stacked pickers on one portrait screen — keep them compact. */
+    #lead-carousel  { --dm-carousel-h: 256px; }
+    #squad-carousel { --dm-carousel-h: 202px; }
+    #lead-carousel  .dm-name { font-size: 26px; }
+    #squad-carousel .dm-name { font-size: 20px; }
+
+    /* Coverflow labels only the centred cameo — the neighbours are just
+       peeking in, and their big names would collide with the next
+       section's heading. The gold ring still flags picked neighbours. */
+    .dm-card:not(.is-active) .dm-name { visibility: hidden; }
+
+    /* Dark glyph on the gold arrows for contrast. */
+    .dm-arrow { color: #0a1628; }
+
+    /* A squad member already in the team reads gold, name and ring. */
+    .dm-card.dm-picked .dm-name { color: #ffd166; }
+    .dm-card.dm-picked .dm-ring::before { border-color: #ffd166; }
+  </style>
 </head>
 <body>
   <canvas id="game"></canvas>
@@ -422,9 +358,9 @@
     <div class="title">DEATH MARCH</div>
     <div class="subtitle">Tiki Beach to Daytona</div>
     <div class="prompt small">CHOOSE YOUR CHARACTER</div>
-    <div class="carousel lead-carousel" id="lead-carousel"></div>
+    <div class="dm-lead" id="lead-carousel"></div>
     <div class="prompt small">WHO'S WALKING WITH YOU</div>
-    <div class="carousel squad-carousel" id="squad-carousel"></div>
+    <div class="dm-squad" id="squad-carousel"></div>
     <div class="prompt small">YOUR TEAM</div>
     <div class="team-box" id="team-box"></div>
     <div class="prompt small">MODE</div>
@@ -465,6 +401,7 @@
        style="position: fixed; top: 0; left: 0; width: 0; height: 0;
               padding-top: env(safe-area-inset-top, 0px); visibility: hidden;"></div>
 
+  <script src="js/carousel.js"></script>
   <script src="js/scripts.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
