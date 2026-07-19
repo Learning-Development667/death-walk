@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.23.0';
+  var VERSION = '0.24.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -2298,20 +2298,26 @@
   // THE ISLAND — a distant landmark out in the sea at a fixed point on
   // the route. Not a doorway: tap it, or drift close along the sea wall,
   // to set off the Robby three-way (driven by leadChar + squad). The
-  // comic-strip sequence is a queued photo overlay — Phase 2 drops the
-  // real Firefly art in by setting `image` on ISLAND_COMIC, no logic
-  // changes needed.
+  // comic-strip is three panels queued through the shared photo overlay,
+  // so it's tap-to-advance like any other queued overlay.
   // ---------------------------------------------------------------------
   var ISLAND_Z = 185;            // fixed position along the route
   var ISLAND_SEA_X = -0.55;      // how far out to sea, as a fraction of W
   var islandUsed = false;
 
-  var ISLAND_COMIC = {
-    caption: 'Robby charges into the surf. Strong start. Twenty metres. ' +
-      'Arms windmilling... glug... glug. A passing pedalo hauls him out ' +
-      'by the trunks. The island remains unconquered.',
-    colour: '#2a9d8f', // placeholder — Phase 2: set image: 'images/...'
-  };
+  // Three-panel gag, shown in narrative order for the Robby variants.
+  var ISLAND_COMIC = [
+    { image: 'images/comics/island-1.png',
+      caption: 'Robby charges into the surf. Strong start.' },
+    { image: 'images/comics/island-2.png',
+      caption: 'Twenty metres out... arms windmilling... glug... glug.' },
+    { image: 'images/comics/island-3.png',
+      caption: 'A passing pedalo hauls him out by the trunks. The island remains unconquered.' },
+  ];
+
+  function queueIslandComic() {
+    ISLAND_COMIC.forEach(function (panel) { queuePhotoOverlay(panel); });
+  }
 
   // The island's centre in screen space, or null when not in view
   function islandScreenPos() {
@@ -2332,12 +2338,12 @@
     islandUsed = true;
     if (leadChar === 'robby') {
       showMessage('I think I can swim that');
-      queuePhotoOverlay(ISLAND_COMIC);
+      queueIslandComic();
     } else if (squadIncludes('robby')) {
       showMessage('Robby, I think you could swim that');
-      queuePhotoOverlay(ISLAND_COMIC);
+      queueIslandComic();
     } else {
-      // No Robby, no swim — just the banter
+      // No Robby, no swim — just the banter, no comic panels
       showMessage("I think Robby could swim that, shame he isn't here");
     }
   }
