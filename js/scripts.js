@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.27.0';
+  var VERSION = '0.28.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -2416,6 +2416,21 @@
     ISLAND_COMIC.forEach(function (panel) { queuePhotoOverlay(panel); });
   }
 
+  // Steve's Ice Cream Stop — the full three-panel interlude, shown only
+  // when Steve is actually along. Same tap-to-advance queue as the island.
+  var STEVE_COMIC = [
+    { image: 'images/comics/icecream-1.png',
+      caption: 'Steve strides up. “Hola amigo! Diez helados, por fa-vor!” Confident. Wrong, but confident.' },
+    { image: 'images/comics/icecream-2.png',
+      caption: 'The vendor just laughs. A queue builds behind him. Steve doubles down, gesturing wildly.' },
+    { image: 'images/comics/icecream-3.png',
+      caption: 'Somehow — a mountain of ice cream. Steve strolls off, vendor waving. Sugar-steadied, the squad marches on.' },
+  ];
+
+  function queueSteveComic() {
+    STEVE_COMIC.forEach(function (panel) { queuePhotoOverlay(panel); });
+  }
+
   // The island's centre in screen space, or null when not in view
   function islandScreenPos() {
     var m = ISLAND_Z - distance;
@@ -2483,14 +2498,11 @@
       var ms2 = steveShopZ() - distance - playerM();
       if (Math.abs(ms2) < 1.0 && hitsPlayer(ICE_SHOP_U, ICE_SHOP_U, 52)) {
         steveUsed = true;
-        // Both variants pause via the message overlay (comic strip art
-        // replaces the present-variant card in Phase 2)
         if (squadIncludes('steve')) {
+          // Steve's here — the full three-panel interlude (tap to advance),
+          // timer frozen while it plays, like the island comic.
           drunk = Math.max(0, drunk - STEVE_BOOST);
-          showMessage("STEVE'S ICE CREAM STOP — Steve, in confident " +
-            'Spanish: “Hola amigo! Dos… no no, DIEZ helados. Por ' +
-            'fa-vor!” The vendor hands over the lot just to end it. ' +
-            'Sugar-steadied, the squad marches on.');
+          queueSteveComic();
         } else {
           // Steve's not with you — you bump into him outside, ordering
           drunk = Math.max(0, drunk - STEVE_BOOST_SMALL);
