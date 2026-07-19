@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.30.0';
+  var VERSION = '0.31.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -353,6 +353,8 @@
       desc: 'Reach the finish with your whole squad still standing.', secret: false },
     { id: 'tikiTumbleSurvivor', name: 'Tiki Tumble Survivor',
       desc: 'Take a Tiki Tumble and still make it to the end.', secret: false },
+    { id: 'philFirstToBar', name: "No way! Phil's first to the bar",
+      desc: 'Playing as Phil, reach Daytona by the proper finish.', secret: false },
     { id: 'tatTrifecta', name: 'Tat Trifecta',
       desc: 'Deck the squad in shades, hat AND chain in a single walk.', secret: true },
     { id: 'closeCall', name: 'Close Call',
@@ -706,9 +708,18 @@
       ending === 'oldtown' ? 'OLD TOWN' :
       ending === 'endless' ? 'OUT OF BEERS' :
       'YOU MADE IT<br>TO DAYTONA';
+    // Playing AS Phil, reaching Daytona by the proper finish: a recurring
+    // in-joke shown every time (alongside the standard stats), plus a
+    // one-off achievement the first time it happens.
+    var philDaytona = (ending === 'daytona' && leadChar === 'phil');
+    if (philDaytona) {
+      unlockAchievement('philFirstToBar', "No way! Phil's first to the bar");
+    }
     endMsgEl.textContent =
       ending === 'oldtown' ? OLD_TOWN_MSG :
       ending === 'endless' ? (Math.floor(distance) + 'm before the beers ran out') :
+      philDaytona ? "You're the only one here, you better wait for someone " +
+        'else to arrive so they can go to the bar.' :
       '';
     endTimeEl.textContent = elapsed.toFixed(1) + 's';
     endScoreEl.textContent = score + ' PTS';
@@ -3721,26 +3732,9 @@
         (mw - 2) * Math.min(drunk / DRUNK_METER_MAX, 1), mh - 2);
     }
 
-    // Carried-item icons beside the meter: roses left, shades right
-    if (roses > 0) {
-      var rx2 = mx - 16;
-      ctx.strokeStyle = '#2c7a49';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(rx2, my + mh);
-      ctx.lineTo(rx2, my - 2);
-      ctx.stroke();
-      ctx.fillStyle = '#ff4d6d';
-      ctx.beginPath();
-      ctx.arc(rx2, my - 4, 4, 0, Math.PI * 2);
-      ctx.fill();
-      if (roses > 1) {
-        ctx.font = '9px "DM Mono", monospace';
-        ctx.textAlign = 'left';
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText('x' + roses, rx2 + 6, my + 3);
-      }
-    }
+    // (The carried rose now has its own illustrated icon + pill in the
+    // second row — no separate glyph beside the meter.)
+
     // Second row: points (with the hen bonus multiplier) and dodge streak
     var rowMid = top + stripH + rowH / 2 - 2;
     ctx.font = '11px "DM Mono", monospace';
