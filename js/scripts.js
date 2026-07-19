@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.15.0';
+  var VERSION = '0.16.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -398,11 +398,9 @@
     selfieUsed = {};
     portalooUsed = false;
     steveUsed = false;
+    islandUsed = false;
     skidzSoiled = false;
-    msgQueue.length = 0;
-    msgOpen = false;
-    if (msgOverlay) msgOverlay.classList.add('hidden');
-    paused = false;
+    closeAllOverlays();
     noticeUntil = 0;
     roseSellerSpawned = false;
     joyId = null;
@@ -436,7 +434,6 @@
     PLAYING_AS_LEE = (leadChar === 'lee');
     SQUAD_HAS_ADAM = (leadChar === 'adam') || !!mateSel.adam;
 
-    hidePhotoOverlay();
 
     // Pre-populate the corridor so the run starts as busy as it plays:
     // hazards spawn 25-110m out and take time to arrive, so an empty
@@ -723,6 +720,19 @@
     if (!canMove() || paused || joyId !== null) return;
     for (var i = 0; i < e.changedTouches.length; i++) {
       var t = e.changedTouches[i];
+      // A tap on the island out at sea sets off the Robby moment
+      if (!islandUsed && state === STATE_WALKING) {
+        var ip = islandScreenPos();
+        if (ip) {
+          var idx = t.clientX - ip.x;
+          var idy = t.clientY - (ip.y - 20 * ip.s);
+          var ir = Math.max(34, 70 * ip.s);
+          if (idx * idx + idy * idy <= ir * ir) {
+            triggerIsland();
+            continue;
+          }
+        }
+      }
       var c = joyCentre();
       var dx = t.clientX - c.x;
       var dy = t.clientY - c.y;
@@ -1354,7 +1364,7 @@
     h.harmless = true; // sold out — she won't trip you afterwards
     if (PLAYING_AS_LEE) {
       // TEMP Lee flavour until Phase 4 character select
-      showPhotoOverlay({
+      queuePhotoOverlay({
         caption: 'Lee eats a rose... turns out they’re out of order. ' +
                  'Buying the lot!',
         colour: '#b23a48',
@@ -1407,7 +1417,7 @@
       addScore(BRIDE_POINTS);
       drunk = Math.max(0, drunk - SWAGGER_SUPER);
       multUntil = frameNow + CHAT_MULT_MS;
-      showPhotoOverlay({
+      queuePhotoOverlay({
         caption: 'The bride gets her bouquet — the whole hen do erupts! ' +
                  '+' + BRIDE_POINTS,
         colour: '#d81159', // placeholder — comic strip art comes later
@@ -1501,7 +1511,7 @@
   // Selfie spots + the photo overlay — a reusable pause-and-show system.
   // Selfie spots are individually placed (not interval-repeated like
   // palms/benches); future stop-offs (ice cream shop, the island...)
-  // trigger the same showPhotoOverlay() with their own image/caption.
+  // trigger the same queuePhotoOverlay() with their own image/caption.
   // Real photos land later as files in images/ — set `image` to a path
   // and it replaces the placeholder colour block.
   // ---------------------------------------------------------------------
@@ -1516,65 +1526,84 @@
   var photoFrame = document.getElementById('photo-frame');
   var photoCaption = document.getElementById('photo-caption');
 
-  function showPhotoOverlay(opts) {
-    photoFrame.style.background = opts.image
-      ? 'center / cover no-repeat url("' + opts.image + '")'
-      : (opts.colour || '#333');
-    photoCaption.textContent = opts.caption || '';
-    photoOverlay.classList.remove('hidden');
-    paused = true;
-  }
-
-  function hidePhotoOverlay() {
-    if (photoOverlay) photoOverlay.classList.add('hidden');
-    // Any queued story messages take over the pause; otherwise resume
-    if (msgQueue.length) pumpMessages();
-    else paused = false;
-  }
-
-  if (photoOverlay) {
-    photoOverlay.addEventListener('click', hidePhotoOverlay);
-  }
-
   // ---------------------------------------------------------------------
-  // Important-message overlay — the single reusable pause system for
-  // narrative/story-beat messages (portaloo, ice cream stop, the shark,
-  // secret achievement unlocks). The game pauses, a centred card shows,
-  // tap dismisses and resumes. Messages queue so back-to-back beats
-  // (e.g. a bonus plus its achievement) play one after another.
+  // The single pause-overlay queue. EVERYTHING that pauses the game for
+  // the player's attention — narrative message cards (portaloo, shark,
+  // secret achievements), photo/comic overlays (selfies, cutscenes,
+  // interludes) — goes through this one ordered queue. Only one thing
+  // shows at a time; anything triggered while something is up waits its
+  // turn, so simultaneous events (a selfie spot mid-soiling, an island
+  // interlude on top of an achievement) resolve cleanly one after
+  // another instead of stacking pause states.
   // Lightweight ambient feedback (rose pill, points, close shaves)
   // stays on the non-pausing HUD notify() path.
   // ---------------------------------------------------------------------
   var msgOverlay = document.getElementById('msg-overlay');
   var msgCard = document.getElementById('msg-card');
-  var msgQueue = [];
+  var overlayQueue = []; // entries: {msg: text} or {photo: opts}
   var msgOpen = false;
+  var photoOpen = false;
 
-  function showMessage(text) {
-    msgQueue.push(text);
-    pumpMessages();
-  }
-
-  function pumpMessages() {
-    if (msgOpen || !msgOverlay || !msgQueue.length) return;
-    if (photoOverlay && !photoOverlay.classList.contains('hidden')) return;
-    msgCard.textContent = msgQueue.shift();
-    msgOverlay.classList.remove('hidden');
-    msgOpen = true;
+  function pumpOverlays() {
+    if (msgOpen || photoOpen || !overlayQueue.length) return;
+    var next = overlayQueue.shift();
+    if (next.msg !== undefined) {
+      if (!msgOverlay) return;
+      msgCard.textContent = next.msg;
+      msgOverlay.classList.remove('hidden');
+      msgOpen = true;
+    } else {
+      if (!photoOverlay) return;
+      var opts = next.photo;
+      photoFrame.style.background = opts.image
+        ? 'center / cover no-repeat url("' + opts.image + '")'
+        : (opts.colour || '#333');
+      photoCaption.textContent = opts.caption || '';
+      photoOverlay.classList.remove('hidden');
+      photoOpen = true;
+    }
     paused = true;
   }
 
-  function hideMsgOverlay() {
-    if (msgOverlay) msgOverlay.classList.add('hidden');
+  function showMessage(text) {
+    overlayQueue.push({ msg: text });
+    pumpOverlays();
+  }
+
+  function queuePhotoOverlay(opts) {
+    overlayQueue.push({ photo: opts });
+    pumpOverlays();
+  }
+
+  function overlayDismissed() {
+    pumpOverlays();
+    if (!msgOpen && !photoOpen && !overlayQueue.length) paused = false;
+  }
+
+  // Close everything immediately (run reset)
+  function closeAllOverlays() {
+    overlayQueue.length = 0;
     msgOpen = false;
-    if (msgQueue.length) pumpMessages();
-    else if (!photoOverlay || photoOverlay.classList.contains('hidden')) {
-      paused = false;
-    }
+    photoOpen = false;
+    if (msgOverlay) msgOverlay.classList.add('hidden');
+    if (photoOverlay) photoOverlay.classList.add('hidden');
+    paused = false;
+  }
+
+  if (photoOverlay) {
+    photoOverlay.addEventListener('click', function () {
+      photoOverlay.classList.add('hidden');
+      photoOpen = false;
+      overlayDismissed();
+    });
   }
 
   if (msgOverlay) {
-    msgOverlay.addEventListener('click', hideMsgOverlay);
+    msgOverlay.addEventListener('click', function () {
+      msgOverlay.classList.add('hidden');
+      msgOpen = false;
+      overlayDismissed();
+    });
   }
 
   function updateSelfieSpots() {
@@ -1584,7 +1613,7 @@
       var mA = spot.z - distance - playerM();
       if (Math.abs(mA) < 1.2 && overlapsPlayer(spot.u, 56)) {
         selfieUsed[i] = true;
-        showPhotoOverlay(spot);
+        queuePhotoOverlay(spot); // queues politely behind anything showing
       }
     }
   }
@@ -1630,6 +1659,62 @@
   var skidzSoiled = false;
   var HOMING_RATE = 0.22; // widths/sec hazards close on the player when soiled
   var SOIL_LINES = ['Dirty bastard!', 'He stinks!', 'Filthy bastard!'];
+
+  // ---------------------------------------------------------------------
+  // THE ISLAND — a distant landmark out in the sea at a fixed point on
+  // the route. Not a doorway: tap it, or drift close along the sea wall,
+  // to set off the Robby three-way (driven by leadChar + squad). The
+  // comic-strip sequence is a queued photo overlay — Phase 2 drops the
+  // real Firefly art in by setting `image` on ISLAND_COMIC, no logic
+  // changes needed.
+  // ---------------------------------------------------------------------
+  var ISLAND_Z = 185;            // fixed position along the route
+  var ISLAND_SEA_X = -0.55;      // how far out to sea, as a fraction of W
+  var islandUsed = false;
+
+  var ISLAND_COMIC = {
+    caption: 'Robby charges into the surf. Strong start. Twenty metres. ' +
+      'Arms windmilling... glug... glug. A passing pedalo hauls him out ' +
+      'by the trunks. The island remains unconquered.',
+    colour: '#2a9d8f', // placeholder — Phase 2: set image: 'images/...'
+  };
+
+  // The island's centre in screen space, or null when not in view
+  function islandScreenPos() {
+    var m = ISLAND_Z - distance;
+    if (m < 2 || m > DRAW_DISTANCE) return null;
+    var d = depthOf(m);
+    var s = spreadOf(d);
+    var seaLevel = depthToY(d) + (dropHeight() + H * 0.075) * d;
+    return {
+      x: depthToX(wallX() + W * ISLAND_SEA_X, d),
+      y: seaLevel,
+      s: s,
+    };
+  }
+
+  function triggerIsland() {
+    if (islandUsed) return;
+    islandUsed = true;
+    if (leadChar === 'robby') {
+      showMessage('I think I can swim that');
+      queuePhotoOverlay(ISLAND_COMIC);
+    } else if (squadIncludes('robby')) {
+      showMessage('Robby, I think you could swim that');
+      queuePhotoOverlay(ISLAND_COMIC);
+    } else {
+      // No Robby, no swim — just the banter
+      showMessage("I think Robby could swim that, shame he isn't here");
+    }
+  }
+
+  function updateIsland() {
+    if (islandUsed) return;
+    // Drifting close along the sea wall, level with the island, counts
+    // as taking an interest
+    var mA = ISLAND_Z - distance - playerM();
+    if (Math.abs(mA) < 3 && playerU < 0.15) triggerIsland();
+  }
 
   function updateStops() {
     if (!portalooUsed) {
@@ -2581,6 +2666,36 @@
     }
   }
 
+  // The Island: a hazy silhouette out in the sea — a mound, a lone palm,
+  // and a shimmer of moonlight on the water beneath it
+  function drawIsland(it, m) {
+    var p = islandScreenPos();
+    if (!p) return;
+    var r = 55 * p.s;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'; // moonlit shimmer
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y + r * 0.18, r * 1.15, r * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#1d3b2f'; // the mound
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, r, r * 0.38, 0, Math.PI, 0);
+    ctx.fill();
+
+    ctx.strokeStyle = '#173125'; // lone palm silhouette
+    ctx.lineWidth = Math.max(1.5, r * 0.07);
+    ctx.beginPath();
+    ctx.moveTo(p.x + r * 0.25, p.y - r * 0.3);
+    ctx.lineTo(p.x + r * 0.32, p.y - r * 0.85);
+    ctx.stroke();
+    ctx.fillStyle = '#173125';
+    ctx.beginPath();
+    ctx.ellipse(p.x + r * 0.32, p.y - r * 0.9, r * 0.3, r * 0.11, -0.3, 0, Math.PI * 2);
+    ctx.ellipse(p.x + r * 0.28, p.y - r * 0.92, r * 0.26, r * 0.1, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // The chip shop doorway past Daytona: warm light spilling out of a
   // frame on the building side. Present in the world, never explained.
   function drawChipDoor(it, m) {
@@ -2684,6 +2799,7 @@
       items.push({ daytona: true, worldZ: RUN_DISTANCE, u: 0.7 });
       items.push({ chipDoor: true, worldZ: chipShopZ(), u: CHIP_DOOR_U });
     }
+    items.push({ island: true, worldZ: ISLAND_Z, u: 0 });
     items.push({ loo: true, worldZ: portalooZ(), u: PORTALOO_U });
     items.push({ ice: true, worldZ: steveShopZ(), u: ICE_SHOP_U });
     items.sort(function (a, b) { return b.worldZ - a.worldZ; });
@@ -2699,6 +2815,7 @@
       else if (items[j].chipDoor) drawChipDoor(items[j], m);
       else if (items[j].loo) drawPortaloo(items[j], m);
       else if (items[j].ice) drawIceShop(items[j], m);
+      else if (items[j].island) drawIsland(items[j], m);
       else {
         drawHazard(items[j], m);
         // Soiled state: the whole promenade heckles as it closes in
@@ -2970,6 +3087,7 @@
       updatePickups(dt);
       updateSelfieSpots();
       updateStops();
+      updateIsland();
       checkFinish();
     }
 
