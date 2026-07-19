@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.28.0';
+  var VERSION = '0.29.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -2051,12 +2051,9 @@
   function collectRose(h) {
     h.harmless = true; // sold out — she won't trip you afterwards
     if (PLAYING_AS_LEE) {
-      // TEMP Lee flavour until Phase 4 character select
-      queuePhotoOverlay({
-        caption: 'Lee eats a rose... turns out they’re out of order. ' +
-                 'Buying the lot!',
-        colour: '#b23a48',
-      });
+      // Lee's two-panel cutscene (tap to advance), timer frozen like the
+      // other comics. The carried-rose grant below is unchanged.
+      queueLeeRoseComic();
     }
     roses += 1;
     notify('ROSE COLLECTED — you are carrying a rose', 4200);
@@ -2429,6 +2426,20 @@
 
   function queueSteveComic() {
     STEVE_COMIC.forEach(function (panel) { queuePhotoOverlay(panel); });
+  }
+
+  // Lee's rose-seller cutscene — two panels, shown only when playing as
+  // Lee. Same tap-to-advance queue as the island/ice cream. (Files are
+  // roses-1/2.png, the actual on-disk names of the Lee rose art.)
+  var LEE_ROSE_COMIC = [
+    { image: 'images/comics/roses-1.png',
+      caption: 'Lee bites clean into a rose — just for the bants. The vendor stares, horrified.' },
+    { image: 'images/comics/roses-2.png',
+      caption: 'Fair’s fair. Lee sheepishly buys the whole bunch — the vendor is delighted.' },
+  ];
+
+  function queueLeeRoseComic() {
+    LEE_ROSE_COMIC.forEach(function (panel) { queuePhotoOverlay(panel); });
   }
 
   // The island's centre in screen space, or null when not in view
