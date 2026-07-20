@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.45.0';
+  var VERSION = '0.46.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -656,7 +656,6 @@
     squadItems.shades = false;
     squadItems.hat = false;
     squadItems.chain = false;
-    selfieUsed = {};
     portalooUsed = false;
     steveUsed = false;
     sharkFedShown = false;
@@ -1984,8 +1983,9 @@
   //   tile   on-screen tile size in px (smaller = more repeats)
   // ---------------------------------------------------------------------
   var ENV_TEXTURES = {
-    sand: { file: 'sand-texture.png', tile: 120, fallback: '#e8c76f', pattern: null },
-    sea:  { file: 'sea-texture.png',  tile: 140, fallback: '#2e6fa3', pattern: null },
+    sand:      { file: 'sand-texture.png',      tile: 120, fallback: '#e8c76f', pattern: null },
+    sea:       { file: 'sea-texture.png',       tile: 140, fallback: '#2e6fa3', pattern: null },
+    promenade: { file: 'promenade-texture.png', tile: 200, fallback: '#c9c2b4', pattern: null },
   };
   var TEX_SCROLL_PPM = 12; // texture-px scrolled per metre walked (in sync
                            // with the promenade paving's forward motion)
@@ -2671,20 +2671,13 @@
   }
 
   // ---------------------------------------------------------------------
-  // Selfie spots + the photo overlay — a reusable pause-and-show system.
-  // Selfie spots are individually placed (not interval-repeated like
-  // palms/benches); future stop-offs (ice cream shop, the island...)
-  // trigger the same queuePhotoOverlay() with their own image/caption.
-  // Real photos land later as files in images/ — set `image` to a path
-  // and it replaces the placeholder colour block.
+  // The photo overlay — a reusable pause-and-show surface. Cutscenes,
+  // comic interludes and achievement unlocks queue through it via
+  // queuePhotoOverlay() with their own image/caption. Real photos land as
+  // files in images/ — set `image` to a path and it replaces any colour
+  // block. (Selfie spots that once used this were removed; a dedicated
+  // squad-photo screen is planned separately.)
   // ---------------------------------------------------------------------
-  var SELFIE_SPOTS = [
-    { z: 90,  u: 0.30, caption: 'Selfie: Tiki Beach sunset',  colour: '#e76f51' },
-    { z: 210, u: 0.65, caption: 'Selfie: the neon strip',     colour: '#457b9d' },
-    { z: 330, u: 0.25, caption: 'Selfie: nearly Daytona',     colour: '#8e6bbf' },
-  ];
-  var selfieUsed = {};
-
   var photoOverlay = document.getElementById('photo-overlay');
   var photoFrame = document.getElementById('photo-frame');
   var photoCaption = document.getElementById('photo-caption');
@@ -2692,12 +2685,11 @@
   // ---------------------------------------------------------------------
   // The single pause-overlay queue. EVERYTHING that pauses the game for
   // the player's attention — narrative message cards (portaloo, shark,
-  // secret achievements), photo/comic overlays (selfies, cutscenes,
-  // interludes) — goes through this one ordered queue. Only one thing
-  // shows at a time; anything triggered while something is up waits its
-  // turn, so simultaneous events (a selfie spot mid-soiling, an island
-  // interlude on top of an achievement) resolve cleanly one after
-  // another instead of stacking pause states.
+  // secret achievements), photo/comic overlays (cutscenes, interludes) —
+  // goes through this one ordered queue. Only one thing shows at a time;
+  // anything triggered while something is up waits its turn, so
+  // simultaneous events (an island interlude on top of an achievement)
+  // resolve cleanly one after another instead of stacking pause states.
   // Lightweight ambient feedback (rose pill, points, close shaves)
   // stays on the non-pausing HUD notify() path.
   // ---------------------------------------------------------------------
@@ -2767,18 +2759,6 @@
       msgOpen = false;
       overlayDismissed();
     });
-  }
-
-  function updateSelfieSpots() {
-    for (var i = 0; i < SELFIE_SPOTS.length; i++) {
-      if (selfieUsed[i]) continue;
-      var spot = SELFIE_SPOTS[i];
-      var mA = spot.z - distance - playerM();
-      if (Math.abs(mA) < 1.2 && overlapsPlayer(spot.u, 56)) {
-        selfieUsed[i] = true;
-        queuePhotoOverlay(spot); // queues politely behind anything showing
-      }
-    }
   }
 
   // ---------------------------------------------------------------------
@@ -3153,31 +3133,34 @@
     var left = promenadeLeft();
     var right = left + promenadeWidth();
 
-    // Light sandy-grey surface
-    fillStrip(left, right, '#c9c2b4');
-
-    ctx.strokeStyle = 'rgba(90, 85, 75, 0.18)';
-    ctx.lineWidth = 1;
-
-    // Tile lines across the promenade, packing together with distance
-    var firstRow = Math.ceil((distance + bottomMetres()) / TILE_METRES);
-    var lastRow = Math.floor((distance + DRAW_DISTANCE) / TILE_METRES);
-    for (var k = firstRow; k <= lastRow; k++) {
-      var d = depthOf(k * TILE_METRES - distance);
-      var y = depthToY(d);
-      ctx.beginPath();
-      ctx.moveTo(depthToX(left, d), y);
-      ctx.lineTo(depthToX(right, d), y);
-      ctx.stroke();
-    }
-
-    // Longitudinal tile grid lines narrowing toward the horizon
-    for (var i = 1; i < GRID_COLUMNS; i++) {
-      var x = left + (promenadeWidth() / GRID_COLUMNS) * i;
-      ctx.beginPath();
-      ctx.moveTo(depthToX(x, 0), horizonY());
-      ctx.lineTo(depthToX(x, dMax), gameBottom());
-      ctx.stroke();
+    var promTex = ENV_TEXTURES.promenade;
+    if (promTex.pattern) {
+      // Real paving texture, tiled across the walkway and scrolled forward
+      // with the player — same flat, screen-space approach as sand and sea.
+      shiftPattern(promTex.pattern, 0, distance * TEX_SCROLL_PPM);
+      fillStrip(left, right, promTex.pattern);
+    } else {
+      // Fallback until the texture loads: flat surface + tile grid lines.
+      fillStrip(left, right, promTex.fallback);
+      ctx.strokeStyle = 'rgba(90, 85, 75, 0.18)';
+      ctx.lineWidth = 1;
+      var firstRow = Math.ceil((distance + bottomMetres()) / TILE_METRES);
+      var lastRow = Math.floor((distance + DRAW_DISTANCE) / TILE_METRES);
+      for (var k = firstRow; k <= lastRow; k++) {
+        var d = depthOf(k * TILE_METRES - distance);
+        var y = depthToY(d);
+        ctx.beginPath();
+        ctx.moveTo(depthToX(left, d), y);
+        ctx.lineTo(depthToX(right, d), y);
+        ctx.stroke();
+      }
+      for (var i = 1; i < GRID_COLUMNS; i++) {
+        var x = left + (promenadeWidth() / GRID_COLUMNS) * i;
+        ctx.beginPath();
+        ctx.moveTo(depthToX(x, 0), horizonY());
+        ctx.lineTo(depthToX(x, dMax), gameBottom());
+        ctx.stroke();
+      }
     }
 
     // Kerb along the building edge; the sea wall marks the left edge
@@ -3213,17 +3196,31 @@
     // closer facades overlap the distant ones.
     var firstBlock = Math.floor((distance + mBottom) / BUILDING_METRES);
     var lastBlock = Math.floor((distance + DRAW_DISTANCE) / BUILDING_METRES);
+    var dMax = bottomDepth();
 
-    for (var b = lastBlock; b >= firstBlock; b--) {
-      var m = Math.max(b * BUILDING_METRES - distance, mBottom);
-      var d = depthOf(m);
-      var y = depthToY(d);
-      var s = spreadOf(d);
+    var b, m, d, y, s;
 
-      var inset = 4 + rand(b) * (buildingWidth() * 0.2);
-      var xL = depthToX(right + inset, d);
-      var xR = depthToX(outer - 2, d);
-      var hgt = (H * 0.22 + rand(b + 57) * H * 0.1) * s;
+    // Pass 1a — one continuous dark facade quad backing the whole building
+    // side, from the promenade kerb line (which recedes to the horizon) out
+    // to the screen edge. Because it follows the kerb as a single shape there
+    // are no per-block steps, so no seam between the sprites can show the
+    // night sky/background through.
+    ctx.fillStyle = '#12233d';
+    ctx.beginPath();
+    ctx.moveTo(depthToX(right, 0), horizonY());
+    ctx.lineTo(W + 12, horizonY());
+    ctx.lineTo(W + 12, gameBottom());
+    ctx.lineTo(depthToX(right, dMax), gameBottom());
+    ctx.closePath();
+    ctx.fill();
+
+    // Pass 1b — per-block detail on that backing: side-street tarmac (which
+    // overrides the wall) and a scatter of lit windows seen through any gap.
+    for (b = lastBlock; b >= firstBlock; b--) {
+      m = Math.max(b * BUILDING_METRES - distance, mBottom);
+      d = depthOf(m);
+      y = depthToY(d);
+      s = spreadOf(d);
 
       if (isRoadBlock(b)) {
         // A side street: tarmac running off to the right instead of a
@@ -3254,40 +3251,36 @@
           ctx.stroke();
           ctx.setLineDash([]);
         }
-        continue; // no facade on road blocks
+        continue; // no windows on road blocks
       }
 
-      // Real building sprite for this block: foot-anchored on the kerb line
-      // (its base-left edge at the promenade edge), scaled by depth to a
-      // block-ish width so its height follows the art. Drawn far-to-near, so
-      // nearer buildings overlap the ones behind into a continuous frontage.
-      var bs = BUILDING_SPRITES[buildingVariant(b)];
-      if (bs) {
-        var scale = (buildingWidth() * s * BUILDING_WIDTH_MUL) / bs.figW;
-        blitSprite(bs, depthToX(right, d), y, bs.figH * scale, bs.cx - bs.figW / 2);
-        continue;
-      }
-
-      // Fallback until the art loads: procedural dark facade with lit windows.
-      ctx.fillStyle = (b % 2 === 0) ? '#12233d' : '#152a47';
-      ctx.fillRect(xL, y - hgt, xR - xL, hgt);
-
-      var cols = 2;
-      var rows = 3;
-      var winW = (xR - xL) / (cols * 2 + 1);
+      var xL = depthToX(right, d);
+      var hgt = (H * 0.34 + rand(b + 57) * H * 0.1) * s;
+      var cols = 3, rows = 4;
+      var winW = (outer - right) * s / (cols * 2 + 1); // window size at this depth
       var winH = hgt / (rows * 2 + 1);
       for (var r = 0; r < rows; r++) {
         for (var c = 0; c < cols; c++) {
-          if (rand(b * 31 + r * 7 + c * 3) < 0.45) continue; // dark window
+          if (rand(b * 31 + r * 7 + c * 3) < 0.5) continue; // dark window
           ctx.fillStyle = 'rgba(255, 209, 102, 0.85)';
-          ctx.fillRect(
-            xL + winW * (c * 2 + 1),
-            y - hgt + winH * (r * 2 + 1),
-            winW,
-            winH
-          );
+          ctx.fillRect(xL + winW * (c * 2 + 1), y - hgt + winH * (r * 2 + 1), winW, winH);
         }
       }
+    }
+
+    // Pass 2 — the illustrated building sprites on top of the backing. Each is
+    // foot-anchored on the kerb (base-left at the promenade edge), scaled by
+    // depth to a block-ish width so its height follows the art. Far-to-near,
+    // so nearer buildings overlap the ones behind into a continuous frontage.
+    for (b = lastBlock; b >= firstBlock; b--) {
+      if (isRoadBlock(b)) continue;
+      var bs = BUILDING_SPRITES[buildingVariant(b)];
+      if (!bs) continue;
+      m = Math.max(b * BUILDING_METRES - distance, mBottom);
+      d = depthOf(m);
+      s = spreadOf(d);
+      var scale = (buildingWidth() * s * BUILDING_WIDTH_MUL) / bs.figW;
+      blitSprite(bs, depthToX(right, d), depthToY(d), bs.figH * scale, bs.cx - bs.figW / 2);
     }
   }
 
@@ -4017,35 +4010,6 @@
     ctx.fill();
   }
 
-  // A selfie spot: phone on a selfie stick, planted in the deck
-  function drawSelfie(it, m) {
-    var d = depthOf(m);
-    var s = spreadOf(d);
-    var x = depthToX(promenadeLeft() + promenadeWidth() * it.u, d);
-    var y = depthToY(d);
-    var w = 22 * s;
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-    ctx.beginPath();
-    ctx.ellipse(x, y, w * 0.5, w * 0.16, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = '#9aa0a6'; // the stick
-    ctx.lineWidth = Math.max(1.5, w * 0.12);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x, y - w * 1.9);
-    ctx.stroke();
-
-    ctx.fillStyle = '#ff4d9d'; // the phone
-    roundRect(x - w * 0.42, y - w * 2.6, w * 0.84, w * 1.3, w * 0.14);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff'; // lens
-    ctx.beginPath();
-    ctx.arc(x, y - w * 1.95, w * 0.16, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
   // The Daytona entrance at the 400m line: a glowing archway hugging the
   // building side, so the only way past is a committed skirt down the
   // left. Walk into it (right side) to finish.
@@ -4207,19 +4171,14 @@
     ctx.fill();
   }
 
-  // Hazards, scenery, pickups, selfie spots, the stops, and the chip
-  // shop drawn together, far-to-near so overlaps stack correctly; split
-  // around the player's depth so passed objects draw over them.
+  // Hazards, scenery, pickups, the stops, and the chip shop drawn
+  // together, far-to-near so overlaps stack correctly; split around the
+  // player's depth so passed objects draw over them.
   function drawWorldObjects(behindPlayer) {
     var items = sceneryItems();
     var i;
     for (i = 0; i < hazards.length; i++) items.push(hazards[i]);
     for (i = 0; i < pickups.length; i++) items.push(pickups[i]);
-    for (i = 0; i < SELFIE_SPOTS.length; i++) {
-      if (!selfieUsed[i]) {
-        items.push({ selfie: true, worldZ: SELFIE_SPOTS[i].z, u: SELFIE_SPOTS[i].u });
-      }
-    }
     if (gameMode === MODE_CLASSIC) {
       items.push({ daytona: true, worldZ: RUN_DISTANCE, u: 0.7 });
       items.push({ chipDoor: true, worldZ: chipShopZ(), u: CHIP_DOOR_U });
@@ -4235,7 +4194,6 @@
       if (behindPlayer ? m >= 0 : m < 0) continue;
       if (items[j].scenery) drawScenery(items[j], m);
       else if (items[j].pickup) drawPickup(items[j], m);
-      else if (items[j].selfie) drawSelfie(items[j], m);
       else if (items[j].daytona) drawDaytona(items[j], m);
       else if (items[j].chipDoor) drawChipDoor(items[j], m);
       else if (items[j].loo) drawPortaloo(items[j], m);
@@ -4529,7 +4487,6 @@
       elapsed += dt;
       updateHazards(dt);
       updatePickups(dt);
-      updateSelfieSpots();
       updateStops();
       updateIsland();
       checkFinish();
