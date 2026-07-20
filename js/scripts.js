@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.43.0';
+  var VERSION = '0.44.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1822,6 +1822,10 @@
   }
   // The four scooter variants, picked at random once per spawn.
   var SCOOTER_VARIANTS = ['scooter1', 'scooter2', 'scooter3', 'scooter4'];
+  // The bench sprite (bench.png) is a top-down 3/4 render that can't stand
+  // upright at this camera, so the procedural bench is used instead. Set true
+  // once a front-on bench sprite is available (see drawScenery bench block).
+  var BENCH_USE_SPRITE = false;
 
   // Scan the visible (alpha > 24) pixels and return the foot-anchor metrics
   // { canvas, cx, baseCx, feetY, figW, figH, w, h } in source pixels. baseCx
@@ -3801,18 +3805,21 @@
     // back the way the procedural version did — in exchange for matching the
     // illustrated art. Placement/collision are unchanged (both still key off
     // cfg.width and it.u).
+    // bench.png is a high 3/4 aerial render (you look down onto the seats),
+    // which can't be billboarded upright at the game's low, near-ground
+    // camera — it always reads as tilted/aerial. So the bench uses the
+    // procedural dual-sided geometry below, which projects correctly into
+    // the scene's perspective. Drop in a low/front-on bench sprite (like the
+    // scooters) and flip BENCH_USE_SPRITE to true to switch back.
     var benchSpr = HAZARD_SPRITES.bench;
-    if (benchSpr.ready) {
-      // Drawn large enough to read as a full bench standing upright — at the
-      // old small size the 3/4 art collapsed into a flat smear. No rotation:
-      // the sprite is billboarded straight, foot-anchored on the ground.
+    if (BENCH_USE_SPRITE && benchSpr.ready) {
       drawHazardSprite(benchSpr, x, y, w * 2.2, 0, 0);
       return;
     }
 
-    // Fallback until the art loads: the procedural dual-sided bench, drawn
-    // with genuine front-to-back length receding toward the horizon — near
-    // and far ends each projected through their own depth.
+    // The procedural dual-sided bench, drawn with genuine front-to-back
+    // length receding toward the horizon — near and far ends each projected
+    // through their own depth, so it stands upright in the scene.
     var lenM = 1.8;                 // physical length along the route
     var dNear = depthOf(m - lenM / 2);
     var dFar = depthOf(m + lenM / 2);
