@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.40.0';
+  var VERSION = '0.41.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1773,6 +1773,13 @@
   // false and the placeholder keeps drawing.
   // ---------------------------------------------------------------------
   var HAZARD_FRAME_SECS = 0.35; // slow leg swap: an unhurried walk, not a jog
+  // Prepared-sprite registry: hazards, static vendors, scenery and props all
+  // share one loader (keyHazardFrame auto-detects transparent art vs opaque
+  // art needing a white-background key) and the foot-anchored draw helpers.
+  //   heightMul   on-screen figure height as a multiple of the draw width
+  //   anchorBase  register horizontally on the base (foot) centre rather than
+  //               the whole-figure centre — for trees whose canopy sits off
+  //               to one side of the trunk it plants
   var HAZARD_SPRITES = {
     // Animated: the pedestrian's 2-frame walk cycle.
     pedestrian:   { files: ['pedestrian-1.png', 'pedestrian-2.png'],
@@ -1785,12 +1792,29 @@
     vendorShades: { files: ['vendor-sunglasses.png'], heightMul: 2.55, frames: [], ready: false },
     vendorHat:    { files: ['vendor-hat.png'],        heightMul: 2.4,  frames: [], ready: false },
     vendorChain:  { files: ['vendor-chain.png'],      heightMul: 2.5,  frames: [], ready: false },
+    // Scenery / props (single still image each). Palms plant on their trunk
+    // base; the bench and portaloo are billboards foot-anchored like the
+    // people. Puke and beer are sized at their own draw sites.
+    palm1:        { files: ['palm-1.png'], heightMul: 3.0, anchorBase: true, frames: [], ready: false },
+    palm2:        { files: ['palm-2.png'], heightMul: 3.0, anchorBase: true, frames: [], ready: false },
+    palm3:        { files: ['palm-3.png'], heightMul: 3.0, anchorBase: true, frames: [], ready: false },
+    bench:        { files: ['bench.png'],     frames: [], ready: false },
+    portaloo:     { files: ['portaloo.png'],  frames: [], ready: false },
+    puke:         { files: ['puke.png'],      frames: [], ready: false },
+    beer:         { files: ['beer.png'],      frames: [], ready: false },
   };
   // Which vendor sprite each looky-looky wares variant uses.
   var LOOKY_SPRITE = { shades: 'vendorShades', hat: 'vendorHat', chain: 'vendorChain' };
+  // The three palm variants, picked deterministically per placement index.
+  var PALM_VARIANTS = ['palm1', 'palm2', 'palm3'];
+  function palmVariant(k) {
+    return PALM_VARIANTS[Math.floor(rand(k * 3.7 + 1.9) * PALM_VARIANTS.length) % PALM_VARIANTS.length];
+  }
 
-  // Scan the visible (alpha > 24) pixels and return the foot-anchor
-  // metrics { canvas, cx, feetY, figW, figH, w, h } in source pixels.
+  // Scan the visible (alpha > 24) pixels and return the foot-anchor metrics
+  // { canvas, cx, baseCx, feetY, figW, figH, w, h } in source pixels. baseCx
+  // is the horizontal centre of the bottom ~4% of the figure (its ground
+  // contact) — the natural plant point for a leaning trunk.
   function measureFrame(cv, px, w, h) {
     var minX = w, maxX = -1, minY = h, maxY = -1;
     for (var q = 0; q < w * h; q++) {
@@ -1802,9 +1826,17 @@
       if (qy > maxY) maxY = qy;
     }
     if (maxY < 0) return null;
+    var bandTop = maxY - Math.max(1, Math.round((maxY - minY) * 0.04));
+    var sumX = 0, nBase = 0;
+    for (var by = bandTop; by <= maxY; by++) {
+      var row = by * w;
+      for (var bx = minX; bx <= maxX; bx++) {
+        if (px[(row + bx) * 4 + 3] > 24) { sumX += bx; nBase++; }
+      }
+    }
     return {
-      canvas: cv, cx: (minX + maxX) / 2, feetY: maxY,
-      figW: maxX - minX + 1, figH: maxY - minY + 1, w: w, h: h,
+      canvas: cv, cx: (minX + maxX) / 2, baseCx: nBase ? sumX / nBase : (minX + maxX) / 2,
+      feetY: maxY, figW: maxX - minX + 1, figH: maxY - minY + 1, w: w, h: h,
     };
   }
 
@@ -1904,6 +1936,34 @@
   })();
 
   // ---------------------------------------------------------------------
+  // Environment textures — flat, tileable top-down art (no baked
+  // perspective) for the beach sand and the sea. Each loads once into a
+  // small offscreen tile and becomes a repeating canvas pattern that fills
+  // the already-projected sand/sea quads in drawBeach; the geometry carries
+  // the perspective, the texture just tiles across it in screen space. Until
+  // a texture loads (or if it fails) the flat fallback colour is used.
+  //   tile   on-screen tile size in px (smaller = more repeats)
+  // ---------------------------------------------------------------------
+  var ENV_TEXTURES = {
+    sand: { file: 'sand-texture.png', tile: 120, fallback: '#e8c76f', pattern: null },
+    sea:  { file: 'sea-texture.png',  tile: 140, fallback: '#2e6fa3', pattern: null },
+  };
+  (function loadEnvTextures() {
+    for (var key in ENV_TEXTURES) {
+      (function (t) {
+        var img = new Image();
+        img.onload = function () {
+          var oc = document.createElement('canvas');
+          oc.width = t.tile; oc.height = t.tile;
+          oc.getContext('2d').drawImage(img, 0, 0, t.tile, t.tile);
+          try { t.pattern = ctx.createPattern(oc, 'repeat'); } catch (e) { t.pattern = null; }
+        };
+        img.src = 'images/environment/' + t.file;
+      })(ENV_TEXTURES[key]);
+    }
+  })();
+
+  // ---------------------------------------------------------------------
   // Fixed scenery — obstacles placed at regular intervals along the
   // route, identical every run (no spawning, no cleanup: positions are
   // computed from distance on demand). A new scenery type is a config
@@ -1947,6 +2007,7 @@
           key: key,
           cfg: cfg,
           scenery: true,
+          k: k,
           worldZ: cfg.offset + k * cfg.interval,
           u: sceneryU(cfg, k),
         });
@@ -2894,7 +2955,7 @@
     var shoreDrop = dropHeight() + H * 0.075; // constant extra slope to the sea
 
     // Sea fills everything left of the shoreline
-    ctx.fillStyle = '#2e6fa3';
+    ctx.fillStyle = ENV_TEXTURES.sea.pattern || ENV_TEXTURES.sea.fallback;
     ctx.beginPath();
     ctx.moveTo(depthToX(xs, 0), hy);
     ctx.lineTo(0, hy);
@@ -2904,7 +2965,7 @@
     ctx.fill();
 
     // Sloping sand between the base of the wall and the shoreline
-    ctx.fillStyle = '#e8c76f';
+    ctx.fillStyle = ENV_TEXTURES.sand.pattern || ENV_TEXTURES.sand.fallback;
     ctx.beginPath();
     ctx.moveTo(depthToX(xw, 0), hy);
     ctx.lineTo(depthToX(xs, 0), hy);
@@ -3230,6 +3291,17 @@
     ctx.fill();
   }
 
+  // Blit a prepared sprite frame, foot-anchored at (x, feetY) and scaled so
+  // the figure stands `screenH` px tall. `anchorX` is the horizontal
+  // registration point in source px (defaults to the frame's bbox centre).
+  function blitSprite(f, x, feetY, screenH, anchorX) {
+    var scale = screenH / f.figH; // source px -> screen px
+    if (anchorX === undefined) anchorX = f.cx;
+    ctx.drawImage(f.canvas, x - anchorX * scale, feetY - f.feetY * scale,
+      f.w * scale, f.h * scale);
+    return scale;
+  }
+
   // Draw an animated hazard sprite, foot-anchored at (x, feetY) and
   // scaled so the figure stands `screenH` px tall. Each frame is placed
   // by its own measured foot point / centre so she stays planted while
@@ -3245,8 +3317,7 @@
     ctx.beginPath();
     ctx.ellipse(x, feetY, f.figW * scale * 0.5, screenH * 0.05, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.drawImage(f.canvas, x - f.cx * scale, feetY - f.feetY * scale,
-      f.w * scale, f.h * scale);
+    blitSprite(f, x, feetY, screenH, spec.anchorBase ? f.baseCx : f.cx);
   }
 
   function drawHazard(h, m) {
@@ -3258,6 +3329,18 @@
       var s = spreadOf(d);
       var x = depthToX(promenadeLeft() + promenadeWidth() * h.u, d);
       var y = depthToY(d);
+
+      // Real puke decal: flat image centred on the ground point (the source
+      // art is already a flat top-down splat, so no foot-anchoring).
+      var pukeSpr = HAZARD_SPRITES.puke;
+      if (pukeSpr.ready) {
+        var pf = pukeSpr.frames[0];
+        var pscale = (cfg.width * s * 1.5) / pf.figW;
+        ctx.drawImage(pf.canvas, x - pf.cx * pscale,
+          y - (pf.feetY - pf.figH / 2) * pscale, pf.w * pscale, pf.h * pscale);
+        return;
+      }
+
       var rx = cfg.width * 0.5 * s;
 
       ctx.fillStyle = cfg.colour;
@@ -3563,6 +3646,21 @@
     var w = cfg.width * s;
 
     if (it.key === 'palm') {
+      // Real palm sprite, one of three variants chosen deterministically per
+      // placement so the promenade shows variety but every run is identical.
+      // Planted on the trunk base (anchorBase), scaled by depth like the
+      // other billboards, with just a small trunk-base shadow.
+      var palm = HAZARD_SPRITES[palmVariant(it.k || 0)];
+      if (palm && palm.ready) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+        ctx.beginPath();
+        ctx.ellipse(x, y, w * 0.45, w * 0.16, 0, 0, Math.PI * 2);
+        ctx.fill();
+        blitSprite(palm.frames[0], x, y, w * palm.heightMul, palm.frames[0].baseCx);
+        return;
+      }
+
+      // Fallback until the art loads: procedural palm.
       var trunkH = w * 2.4;
       var top = y - trunkH;
 
@@ -3601,11 +3699,20 @@
       return;
     }
 
-    // Bench: dual-sided promenade bench, drawn with genuine front-to-back
-    // length receding toward the horizon — near and far ends are each
-    // projected through their own depth (same technique as the ledge
-    // steps and kerb lines), so the seats and backrest are true 3D
-    // planks rather than a flat cutout facing the camera.
+    // Bench: real billboard sprite (foot-anchored, depth-scaled like the
+    // people/vendors). A deliberate trade — it no longer recedes front-to-
+    // back the way the procedural version did — in exchange for matching the
+    // illustrated art. Placement/collision are unchanged (both still key off
+    // cfg.width and it.u).
+    var benchSpr = HAZARD_SPRITES.bench;
+    if (benchSpr.ready) {
+      drawHazardSprite(benchSpr, x, y, w * 1.05, 0, 0);
+      return;
+    }
+
+    // Fallback until the art loads: the procedural dual-sided bench, drawn
+    // with genuine front-to-back length receding toward the horizon — near
+    // and far ends each projected through their own depth.
     var lenM = 1.8;                 // physical length along the route
     var dNear = depthOf(m - lenM / 2);
     var dFar = depthOf(m + lenM / 2);
@@ -3742,6 +3849,14 @@
       ctx.beginPath();
       ctx.arc(x + w * 0.2, y - lh * 0.45, w * 0.05, 0, Math.PI * 2);
       ctx.fill();
+      return;
+    }
+
+    // Real beer icon, foot-anchored on the ground point (the shadow above
+    // is already drawn). Collection path is unchanged — this is art only.
+    var beerSpr = HAZARD_SPRITES.beer;
+    if (beerSpr.ready) {
+      blitSprite(beerSpr.frames[0], x, y, w * 1.9, beerSpr.frames[0].cx);
       return;
     }
 
@@ -3891,6 +4006,14 @@
     var y = depthToY(d);
     var w = 40 * s;
     var h2 = w * 1.7;
+
+    // Real portaloo sprite, foot-anchored at the same footprint the
+    // placeholder used. Position/mechanic unchanged — art swap only.
+    var looSpr = HAZARD_SPRITES.portaloo;
+    if (looSpr.ready) {
+      drawHazardSprite(looSpr, x, y, h2, 0, 0);
+      return;
+    }
 
     ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
     ctx.beginPath();

@@ -2,7 +2,7 @@
   "name": "Death March",
   "short_name": "Death March",
   "description": "Tiki Beach to Daytona. A portrait arcade walking game.",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
