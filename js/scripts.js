@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.46.0';
+  var VERSION = '0.47.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -730,6 +730,8 @@
   var CHIP_EXTRA_M = 12;          // the chip shop sits this far past Daytona
   var CHIP_DOOR_U = 0.9;          // where the chip doorway is drawn
   var CHIP_DOOR_MIN_U = 0.82;     // how far right you must be to enter it
+  var CHIP_DOOR_DEPTH_M = 10;     // generous trigger depth around the door so
+                                  // a drunk player who reaches its side registers
   var CHIP_POINTS = 750;
   var END_ZONE_M = 26;            // desolate tumbleweed stretch past the shop
   var OLD_TOWN_MSG =
@@ -764,9 +766,14 @@
       return;
     }
     // Through the chip shop door further along = chips (locked, not ended
-    // yet — you still walk it out through the end zone)
+    // yet — you still walk it out through the end zone). The trigger opens a
+    // little before the door and stays open well past it (a generous depth,
+    // not the tight 3m Daytona depth) so that reaching the door's side of the
+    // promenade once you've bypassed Daytona reliably registers — the old 3m
+    // slot was easy to overshoot while drunk.
     if (pendingEnding === null &&
-        eff >= chipShopZ() && eff <= chipShopZ() + DAYTONA_DEPTH_M &&
+        eff >= chipShopZ() - CHIP_DOOR_DEPTH_M * 0.3 &&
+        eff <= chipShopZ() + CHIP_DOOR_DEPTH_M &&
         playerU >= CHIP_DOOR_MIN_U) {
       pendingEnding = 'chips';
     }
@@ -1959,8 +1966,10 @@
   // ---------------------------------------------------------------------
   var BUILDING_FILES = ['building-1.png', 'building-2.png', 'building-3.png',
                         'building-4.png', 'building-5.png', 'building-6.png'];
-  var BUILDING_WIDTH_MUL = 1.6; // building draw width as a multiple of a block,
-                                // wide enough that neighbours overlap into a wall
+  var BUILDING_WIDTH_MUL = 1.35; // building draw width as a multiple of a block
+  var BUILDING_STRIDE = 3;       // place a sprite every N blocks so each building
+                                 // stands at its own spot instead of bunching/
+                                 // clipping into the one behind it
   var BUILDING_SPRITES = [];  // index -> prepared frame (or undefined until loaded)
   (function loadBuildings() {
     BUILDING_FILES.forEach(function (file, i) {
@@ -3270,9 +3279,12 @@
 
     // Pass 2 — the illustrated building sprites on top of the backing. Each is
     // foot-anchored on the kerb (base-left at the promenade edge), scaled by
-    // depth to a block-ish width so its height follows the art. Far-to-near,
-    // so nearer buildings overlap the ones behind into a continuous frontage.
+    // depth. Placed every BUILDING_STRIDE blocks (fixed in world space) so each
+    // building sits at its own spot along the receding edge rather than
+    // bunching up and clipping into the one behind it; the continuous backing
+    // wall covers the space between them. Drawn far-to-near.
     for (b = lastBlock; b >= firstBlock; b--) {
+      if (b % BUILDING_STRIDE !== 0) continue;
       if (isRoadBlock(b)) continue;
       var bs = BUILDING_SPRITES[buildingVariant(b)];
       if (!bs) continue;
@@ -3840,7 +3852,10 @@
     // scooters) and flip BENCH_USE_SPRITE to true to switch back.
     var benchSpr = HAZARD_SPRITES.bench;
     if (BENCH_USE_SPRITE && benchSpr.ready) {
-      drawHazardSprite(benchSpr, x, y, w * 2.2, 0, 0);
+      // Sized to sit within the promenade at its edge lane, like the palms —
+      // the back-to-back art is wide, so it's scaled down so it doesn't spill
+      // off the kerb onto the beach.
+      drawHazardSprite(benchSpr, x, y, w * 1.15, 0, 0);
       return;
     }
 
