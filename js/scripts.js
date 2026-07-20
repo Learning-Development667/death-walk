@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.38.0';
+  var VERSION = '0.39.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1740,7 +1740,7 @@
     drunkLads:  { speed: 1.4, spawn: [45, 75],  width: 27, lurch: [0.16, 0.5, 1.3],
                   group: [2, 3],
                   effect: 'stumble', penalty: 2, weight: 13, colour: '#4d96ff' },
-    performer:  { speed: 0.15, spawn: [50, 110], width: 24, drift: 0,
+    performer:  { speed: 0.15, spawn: [50, 110], width: 24, drift: 0, static: true,
                   effect: 'stumble', penalty: 2, weight: 10, colour: '#25ced1' },
     puke:       { speed: 0,   spawn: [40, 70],  width: 44, drift: 0, ground: true,
                   effect: 'skid', penalty: 0, weight: 13, colour: '#8aa62f' },
@@ -1772,7 +1772,7 @@
   // while the legs cycle. Frames that fail to load or key leave `ready`
   // false and the placeholder keeps drawing.
   // ---------------------------------------------------------------------
-  var HAZARD_FRAME_SECS = 0.17; // ~6 fps leg swap: reads as walking, not jitter
+  var HAZARD_FRAME_SECS = 0.35; // slow leg swap: an unhurried walk, not a jog
   var HAZARD_SPRITES = {
     pedestrian: { files: ['pedestrian-1.png', 'pedestrian-2.png'],
                   heightMul: 2.4, frames: [], ready: false },
@@ -2191,9 +2191,11 @@
       h.age += dt;
       h.worldZ -= cfg.speed * dt;
 
-      if (skidzSoiled && !cfg.ground && !h.harmless) {
-        // Everyone can smell it: hazards abandon their own patterns and
-        // home in on the player for the rest of the run
+      if (skidzSoiled && !cfg.ground && !cfg.static && !h.harmless) {
+        // Everyone can smell it: moving hazards abandon their own patterns
+        // and home in on the player for the rest of the run. Static vendors
+        // (rose seller, looky looky men, street performers) are exempt —
+        // they can't move, so they stay put and never heckle.
         if (!h.soilLine) {
           h.soilLine = SOIL_LINES[Math.floor(Math.random() * SOIL_LINES.length)];
         }
