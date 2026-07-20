@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.41.0';
+  var VERSION = '0.42.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1802,6 +1802,13 @@
     portaloo:     { files: ['portaloo.png'],  frames: [], ready: false },
     puke:         { files: ['puke.png'],      frames: [], ready: false },
     beer:         { files: ['beer.png'],      frames: [], ready: false },
+    // Mobility scooters: four front-on rider variants (motion lines baked
+    // in). One is picked at random per spawn. Symmetric/straight-on so
+    // billboard scaling reads correctly head-on as they close in.
+    scooter1:     { files: ['scooter-1.png'], heightMul: 1.7, frames: [], ready: false },
+    scooter2:     { files: ['scooter-2.png'], heightMul: 1.7, frames: [], ready: false },
+    scooter3:     { files: ['scooter-3.png'], heightMul: 1.7, frames: [], ready: false },
+    scooter4:     { files: ['scooter-4.png'], heightMul: 1.7, frames: [], ready: false },
   };
   // Which vendor sprite each looky-looky wares variant uses.
   var LOOKY_SPRITE = { shades: 'vendorShades', hat: 'vendorHat', chain: 'vendorChain' };
@@ -1810,6 +1817,8 @@
   function palmVariant(k) {
     return PALM_VARIANTS[Math.floor(rand(k * 3.7 + 1.9) * PALM_VARIANTS.length) % PALM_VARIANTS.length];
   }
+  // The four scooter variants, picked at random once per spawn.
+  var SCOOTER_VARIANTS = ['scooter1', 'scooter2', 'scooter3', 'scooter4'];
 
   // Scan the visible (alpha > 24) pixels and return the foot-anchor metrics
   // { canvas, cx, baseCx, feetY, figW, figH, w, h } in source pixels. baseCx
@@ -1961,6 +1970,27 @@
         img.src = 'images/environment/' + t.file;
       })(ENV_TEXTURES[key]);
     }
+  })();
+
+  // Foam strip: a tileable horizontal band of surf (soft transparent fade
+  // top and bottom). Cropped to the foam band at load, then tiled along the
+  // sand/sea seam in drawBeach so the shoreline reads as one foamy edge
+  // rather than two textures butting together.
+  var ENV_FOAM = { file: 'foam-texture.png', strip: null, aspect: 1 };
+  (function loadFoam() {
+    var img = new Image();
+    img.onload = function () {
+      // Keep the vertical middle (foam + fades), drop the empty margins.
+      var y0 = Math.round(img.naturalHeight * 0.34);
+      var y1 = Math.round(img.naturalHeight * 0.62);
+      var sw = img.naturalWidth, sh = y1 - y0;
+      var oc = document.createElement('canvas');
+      oc.width = sw; oc.height = sh;
+      oc.getContext('2d').drawImage(img, 0, y0, sw, sh, 0, 0, sw, sh);
+      ENV_FOAM.strip = oc;
+      ENV_FOAM.aspect = sw / sh;
+    };
+    img.src = 'images/environment/' + ENV_FOAM.file;
   })();
 
   // ---------------------------------------------------------------------
@@ -2182,6 +2212,12 @@
     // rather than a hazard (see henBonus)
     if (key === 'henParty') {
       h.bride = Math.random() < 0.35;
+    }
+
+    // Each scooter gets one of the four rider sprites at random (art only —
+    // speed, warning window and veer all stay the type's config values).
+    if (key === 'scooter') {
+      h.scooterVariant = SCOOTER_VARIANTS[Math.floor(Math.random() * SCOOTER_VARIANTS.length)];
     }
 
     hazards.push(h);
@@ -2974,13 +3010,39 @@
     ctx.closePath();
     ctx.fill();
 
-    // Foam line where sea meets sand
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(depthToX(xs, 0), hy);
-    ctx.lineTo(depthToX(xs, dMax), sunkenY(dMax, shoreDrop));
-    ctx.stroke();
+    // Foam along the sand/sea seam. The seam is a straight line from the
+    // horizon (d=0) to the near edge (d=dMax); the foam strip tiles along
+    // it, centred on the line, its thickness tapering with depth (thin at
+    // the horizon, full at the player) so it sits in the beach geometry the
+    // same way the sand/sea textures do. Falls back to a thin white line.
+    var fx0 = depthToX(xs, 0), fy0 = hy;
+    var fx1 = depthToX(xs, dMax), fy1 = sunkenY(dMax, shoreDrop);
+    if (ENV_FOAM.strip) {
+      var flen = Math.hypot(fx1 - fx0, fy1 - fy0);
+      var fang = Math.atan2(fy1 - fy0, fx1 - fx0);
+      var thickNear = H * 0.055;            // band height at the player end
+      var sN = spreadOf(dMax);
+      var tileW = thickNear * ENV_FOAM.aspect * 0.5;
+      ctx.save();
+      ctx.translate(fx0, fy0);
+      ctx.rotate(fang);
+      ctx.beginPath();
+      ctx.rect(0, -thickNear, flen, thickNear * 2); // clip stray overshoot
+      ctx.clip();
+      for (var fx = 0; fx < flen; fx += tileW) {
+        var ft = (fx + tileW / 2) / flen;   // 0 at horizon -> 1 at player
+        var hh = thickNear * (spreadOf(dMax * ft) / sN); // perspective taper
+        ctx.drawImage(ENV_FOAM.strip, fx, -hh / 2, tileW, hh);
+      }
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(fx0, fy0);
+      ctx.lineTo(fx1, fy1);
+      ctx.stroke();
+    }
   }
 
   // The boardwalk ledge — the visible boundary of the walkable area and
@@ -3445,6 +3507,15 @@
     }
 
     if (h.key === 'scooter') {
+      // Real front-on scooter sprite (one of four variants, chosen at
+      // spawn). Foot-anchored/depth-scaled like the other billboards; the
+      // baked motion lines + the code-driven veer sell the speed. Falls
+      // back to the placeholder vehicle until the art loads.
+      var scoot = HAZARD_SPRITES[h.scooterVariant];
+      if (scoot && scoot.ready) {
+        drawHazardSprite(scoot, x2, y2, w2 * scoot.heightMul, 0, 0);
+        return;
+      }
       // Unmistakably a vehicle: chassis, wheels, steering column,
       // helmeted rider — wide and low
       ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
