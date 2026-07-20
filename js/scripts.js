@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.39.0';
+  var VERSION = '0.40.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1774,13 +1774,45 @@
   // ---------------------------------------------------------------------
   var HAZARD_FRAME_SECS = 0.35; // slow leg swap: an unhurried walk, not a jog
   var HAZARD_SPRITES = {
-    pedestrian: { files: ['pedestrian-1.png', 'pedestrian-2.png'],
-                  heightMul: 2.4, frames: [], ready: false },
+    // Animated: the pedestrian's 2-frame walk cycle.
+    pedestrian:   { files: ['pedestrian-1.png', 'pedestrian-2.png'],
+                    heightMul: 2.4, frames: [], ready: false },
+    // Static vendors: a single still image each — no walk cycle needed,
+    // they stand in place. This art ships with a real transparent
+    // background, so keyHazardFrame skips the flood-fill key (that is only
+    // for opaque art like the pedestrian) and just measures the figure.
+    roseSeller:   { files: ['rose-seller.png'],       heightMul: 2.7,  frames: [], ready: false },
+    vendorShades: { files: ['vendor-sunglasses.png'], heightMul: 2.55, frames: [], ready: false },
+    vendorHat:    { files: ['vendor-hat.png'],        heightMul: 2.4,  frames: [], ready: false },
+    vendorChain:  { files: ['vendor-chain.png'],      heightMul: 2.5,  frames: [], ready: false },
   };
+  // Which vendor sprite each looky-looky wares variant uses.
+  var LOOKY_SPRITE = { shades: 'vendorShades', hat: 'vendorHat', chain: 'vendorChain' };
 
-  // Key the background out of one loaded frame and measure the figure.
-  // Returns { canvas, cx, feetY, figW, figH, w, h } in source pixels, or
-  // null if the pixels can't be read (frame then counts as failed).
+  // Scan the visible (alpha > 24) pixels and return the foot-anchor
+  // metrics { canvas, cx, feetY, figW, figH, w, h } in source pixels.
+  function measureFrame(cv, px, w, h) {
+    var minX = w, maxX = -1, minY = h, maxY = -1;
+    for (var q = 0; q < w * h; q++) {
+      if (px[q * 4 + 3] <= 24) continue;
+      var qx = q % w, qy = (q / w) | 0;
+      if (qx < minX) minX = qx;
+      if (qx > maxX) maxX = qx;
+      if (qy < minY) minY = qy;
+      if (qy > maxY) maxY = qy;
+    }
+    if (maxY < 0) return null;
+    return {
+      canvas: cv, cx: (minX + maxX) / 2, feetY: maxY,
+      figW: maxX - minX + 1, figH: maxY - minY + 1, w: w, h: h,
+    };
+  }
+
+  // Prepare one loaded frame for foot-anchored drawing. Art that already
+  // ships with a transparent background (the vendor sprites) is measured
+  // as-is. Opaque art on a near-white background (the pedestrian pair) is
+  // flood-filled from the borders to key that background out first.
+  // Returns the metrics, or null if the pixels can't be read.
   function keyHazardFrame(img) {
     var w = img.naturalWidth, h = img.naturalHeight;
     if (!w || !h) return null;
@@ -1791,6 +1823,13 @@
     var data;
     try { data = c.getImageData(0, 0, w, h); } catch (e) { return null; }
     var px = data.data;
+
+    // Already transparent? (all four corners clear) — no keying needed.
+    if (px[3] <= 16 && px[(w - 1) * 4 + 3] <= 16 &&
+        px[(w * (h - 1)) * 4 + 3] <= 16 && px[(w * h - 1) * 4 + 3] <= 16) {
+      return measureFrame(cv, px, w, h);
+    }
+
     var BG = 236; // all channels at/above this read as background
     var seen = new Uint8Array(w * h);
     var stack = [];
@@ -3376,7 +3415,16 @@
     }
 
     if (h.key === 'performer' && h.variant === 'roseSeller') {
-      // Rose seller: red-dressed figure with a basket of roses
+      // Rose seller: real sprite (woman in an abaya holding bundles of
+      // roses). Static — a single still image, foot-anchored like the
+      // pedestrian but with no frame swap.
+      var rs = HAZARD_SPRITES.roseSeller;
+      if (rs.ready) {
+        drawHazardSprite(rs, x2, y2, w2 * rs.heightMul, 0, 0);
+        return;
+      }
+      // Fallback placeholder until the art loads: red-dressed figure with
+      // a basket of roses.
       ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
       ctx.beginPath();
       ctx.ellipse(x2, y2, w2 * 0.7, w2 * 0.26, 0, 0, Math.PI * 2);
@@ -3406,10 +3454,18 @@
     }
 
     if (h.key === 'performer' && h.variant === 'lookyMan') {
-      // Looky looky man — a Black street vendor (placeholder shapes;
-      // PHASE 2 ART BRIEF: real sprite should depict a Black man with
-      // his wares tray). Three wares variants share the silhouette,
-      // the tray contents differ.
+      // Looky looky man — a street vendor. Each wares variant now has its
+      // own real sprite (sunglasses / hats / chains). Static single image,
+      // foot-anchored; the "Looky looky" bubble floats above whichever
+      // sprite is drawn.
+      var lk = HAZARD_SPRITES[LOOKY_SPRITE[h.wares]] || HAZARD_SPRITES.vendorShades;
+      if (lk.ready) {
+        drawHazardSprite(lk, x2, y2, w2 * lk.heightMul, 0, 0);
+        drawBubble(x2, y2 - w2 * (lk.heightMul + 0.35), 'Looky looky', w2);
+        return;
+      }
+      // Fallback placeholder until the art loads: shared silhouette with
+      // the wares differing on the tray.
       var bodyC = '#e09f3e';
       ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
       ctx.beginPath();
