@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.42.0';
+  var VERSION = '0.43.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1795,9 +1795,12 @@
     // Scenery / props (single still image each). Palms plant on their trunk
     // base; the bench and portaloo are billboards foot-anchored like the
     // people. Puke and beer are sized at their own draw sites.
-    palm1:        { files: ['palm-1.png'], heightMul: 3.0, anchorBase: true, frames: [], ready: false },
-    palm2:        { files: ['palm-2.png'], heightMul: 3.0, anchorBase: true, frames: [], ready: false },
-    palm3:        { files: ['palm-3.png'], heightMul: 3.0, anchorBase: true, frames: [], ready: false },
+    // Palms stand ~3.5x the player's height at the same depth (proper full-
+    // grown trees). Planted on the trunk base, so the tall canopy grows
+    // upward from a fixed foot point and still scales down toward the horizon.
+    palm1:        { files: ['palm-1.png'], heightMul: 8.5, anchorBase: true, frames: [], ready: false },
+    palm2:        { files: ['palm-2.png'], heightMul: 8.5, anchorBase: true, frames: [], ready: false },
+    palm3:        { files: ['palm-3.png'], heightMul: 8.5, anchorBase: true, frames: [], ready: false },
     bench:        { files: ['bench.png'],     frames: [], ready: false },
     portaloo:     { files: ['portaloo.png'],  frames: [], ready: false },
     puke:         { files: ['puke.png'],      frames: [], ready: false },
@@ -1957,6 +1960,17 @@
     sand: { file: 'sand-texture.png', tile: 120, fallback: '#e8c76f', pattern: null },
     sea:  { file: 'sea-texture.png',  tile: 140, fallback: '#2e6fa3', pattern: null },
   };
+  var TEX_SCROLL_PPM = 12; // texture-px scrolled per metre walked (in sync
+                           // with the promenade paving's forward motion)
+
+  // Offset a repeating pattern in screen space. Sliding a tileable pattern by
+  // any amount keeps it seamless, so this both scrolls the ground with the
+  // player and adds gentle per-frame drift for living motion.
+  function shiftPattern(pat, tx, ty) {
+    if (pat && pat.setTransform) {
+      try { pat.setTransform(new DOMMatrix([1, 0, 0, 1, tx, ty])); } catch (e) {}
+    }
+  }
   (function loadEnvTextures() {
     for (var key in ENV_TEXTURES) {
       (function (t) {
@@ -2990,6 +3004,18 @@
     var sandDrop = dropHeight();        // sand sits at the base of the drop
     var shoreDrop = dropHeight() + H * 0.075; // constant extra slope to the sea
 
+    // Scroll both ground textures with forward movement, and add a little
+    // life on top: the sea swells/ripples, the sand shimmers faintly. Both
+    // are subtle so the surfaces read as alive, not sliding.
+    var tsec = frameNow / 1000;
+    var seaScroll = distance * TEX_SCROLL_PPM;
+    shiftPattern(ENV_TEXTURES.sea.pattern,
+      Math.sin(tsec * 0.8) * 7 + Math.sin(tsec * 1.7) * 3,          // wave sway
+      seaScroll + Math.sin(tsec * 1.1) * 4);                        // swell
+    shiftPattern(ENV_TEXTURES.sand.pattern,
+      Math.sin(tsec * 0.5) * 1.5,                                   // faint shimmer
+      distance * TEX_SCROLL_PPM);
+
     // Sea fills everything left of the shoreline
     ctx.fillStyle = ENV_TEXTURES.sea.pattern || ENV_TEXTURES.sea.fallback;
     ctx.beginPath();
@@ -3777,7 +3803,10 @@
     // cfg.width and it.u).
     var benchSpr = HAZARD_SPRITES.bench;
     if (benchSpr.ready) {
-      drawHazardSprite(benchSpr, x, y, w * 1.05, 0, 0);
+      // Drawn large enough to read as a full bench standing upright — at the
+      // old small size the 3/4 art collapsed into a flat smear. No rotation:
+      // the sprite is billboarded straight, foot-anchored on the ground.
+      drawHazardSprite(benchSpr, x, y, w * 2.2, 0, 0);
       return;
     }
 
