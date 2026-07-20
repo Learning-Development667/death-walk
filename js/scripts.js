@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.44.0';
+  var VERSION = '0.45.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1825,7 +1825,7 @@
   // The bench sprite (bench.png) is a top-down 3/4 render that can't stand
   // upright at this camera, so the procedural bench is used instead. Set true
   // once a front-on bench sprite is available (see drawScenery bench block).
-  var BENCH_USE_SPRITE = false;
+  var BENCH_USE_SPRITE = true;
 
   // Scan the visible (alpha > 24) pixels and return the foot-anchor metrics
   // { canvas, cx, baseCx, feetY, figW, figH, w, h } in source pixels. baseCx
@@ -1950,6 +1950,29 @@
       })(HAZARD_SPRITES[key]);
     }
   })();
+
+  // ---------------------------------------------------------------------
+  // Building sprites — front-on facade art lining the building-side edge.
+  // Six variants; one is picked deterministically per building block (like
+  // the palms) so the frontage varies but every run is identical. Each is
+  // measured/keyed the same way as the other sprites; blocks whose chosen
+  // sprite hasn't loaded fall back to the procedural facade.
+  // ---------------------------------------------------------------------
+  var BUILDING_FILES = ['building-1.png', 'building-2.png', 'building-3.png',
+                        'building-4.png', 'building-5.png', 'building-6.png'];
+  var BUILDING_WIDTH_MUL = 1.6; // building draw width as a multiple of a block,
+                                // wide enough that neighbours overlap into a wall
+  var BUILDING_SPRITES = [];  // index -> prepared frame (or undefined until loaded)
+  (function loadBuildings() {
+    BUILDING_FILES.forEach(function (file, i) {
+      var img = new Image();
+      img.onload = function () { var f = keyHazardFrame(img); if (f) BUILDING_SPRITES[i] = f; };
+      img.src = 'images/buildings/' + file;
+    });
+  })();
+  function buildingVariant(b) {
+    return Math.floor(rand(b * 2.3 + 5.1) * BUILDING_FILES.length) % BUILDING_FILES.length;
+  }
 
   // ---------------------------------------------------------------------
   // Environment textures — flat, tileable top-down art (no baked
@@ -3016,9 +3039,9 @@
     shiftPattern(ENV_TEXTURES.sea.pattern,
       Math.sin(tsec * 0.8) * 7 + Math.sin(tsec * 1.7) * 3,          // wave sway
       seaScroll + Math.sin(tsec * 1.1) * 4);                        // swell
-    shiftPattern(ENV_TEXTURES.sand.pattern,
-      Math.sin(tsec * 0.5) * 1.5,                                   // faint shimmer
-      distance * TEX_SCROLL_PPM);
+    // Sand only scrolls forward with the player — no horizontal time-based
+    // drift, which read as sea-like left-right wave motion.
+    shiftPattern(ENV_TEXTURES.sand.pattern, 0, distance * TEX_SCROLL_PPM);
 
     // Sea fills everything left of the shoreline
     ctx.fillStyle = ENV_TEXTURES.sea.pattern || ENV_TEXTURES.sea.fallback;
@@ -3234,10 +3257,21 @@
         continue; // no facade on road blocks
       }
 
+      // Real building sprite for this block: foot-anchored on the kerb line
+      // (its base-left edge at the promenade edge), scaled by depth to a
+      // block-ish width so its height follows the art. Drawn far-to-near, so
+      // nearer buildings overlap the ones behind into a continuous frontage.
+      var bs = BUILDING_SPRITES[buildingVariant(b)];
+      if (bs) {
+        var scale = (buildingWidth() * s * BUILDING_WIDTH_MUL) / bs.figW;
+        blitSprite(bs, depthToX(right, d), y, bs.figH * scale, bs.cx - bs.figW / 2);
+        continue;
+      }
+
+      // Fallback until the art loads: procedural dark facade with lit windows.
       ctx.fillStyle = (b % 2 === 0) ? '#12233d' : '#152a47';
       ctx.fillRect(xL, y - hgt, xR - xL, hgt);
 
-      // Lit window rectangles on the facade
       var cols = 2;
       var rows = 3;
       var winW = (xR - xL) / (cols * 2 + 1);
