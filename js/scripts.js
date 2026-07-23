@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.50.0';
+  var VERSION = '0.51.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -2222,8 +2222,11 @@
                  width: 170, decor: true, beach: true },
     blueBin:   { interval: 43, offset: 24, lanes: [0.965, 0.035], jitter: 0.008,
                  width: 17, decor: true },
-    tilePatch: { interval: 61, offset: 36, lanes: [0.32, 0.62], jitter: 0.1,
-                 width: 78, decor: true },
+    // The promenade base is now plain grey — these hex-tile patches are the
+    // only tiled detail left, so they run more often (was every 61m) and a
+    // touch larger so they read clearly against the plain surface at a glance.
+    tilePatch: { interval: 27, offset: 20, lanes: [0.32, 0.62], jitter: 0.1,
+                 width: 104, decor: true },
   };
 
   function sceneryU(cfg, k) {
