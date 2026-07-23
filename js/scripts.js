@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.51.0';
+  var VERSION = '0.52.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1910,6 +1910,19 @@
     // Animated: the pedestrian's 2-frame walk cycle.
     pedestrian:   { files: ['pedestrian-1.png', 'pedestrian-2.png'],
                     heightMul: 2.4, frames: [], ready: false },
+    // Joggers: a 2-frame run cycle each (the left/right frames are the two
+    // strides). A gender is chosen once per spawn and kept for the runner's
+    // whole time on screen. A quicker frameSecs than the pedestrian's walk so
+    // the leg swap reads as a run, not a jitter or a stroll.
+    joggerMale:   { files: ['male-jogger-left.png', 'male-jogger-right.png'],
+                    heightMul: 2.5, frameSecs: 0.19, frames: [], ready: false },
+    joggerFemale: { files: ['female-jogger-left.png', 'female-jogger-right.png'],
+                    heightMul: 2.5, frameSecs: 0.19, frames: [], ready: false },
+    // Drunk lads: ONE group-of-three billboard with a 2-frame sway cycle
+    // (drunk-lads-1/2 are the same trio tipping one way then the other, not
+    // two separate hazards). A slow frameSecs so it reads as a tipsy sway.
+    drunkLads:    { files: ['drunk-lads-1.png', 'drunk-lads-2.png'],
+                    heightMul: 2.05, frameSecs: 0.55, frames: [], ready: false },
     // Static vendors: a single still image each — no walk cycle needed,
     // they stand in place. This art ships with a real transparent
     // background, so keyHazardFrame skips the flood-fill key (that is only
@@ -2429,6 +2442,12 @@
     // speed, warning window and veer all stay the type's config values).
     if (key === 'scooter') {
       h.scooterVariant = SCOOTER_VARIANTS[Math.floor(Math.random() * SCOOTER_VARIANTS.length)];
+    }
+
+    // Each jogger is male or female, chosen once here so the same runner keeps
+    // their gender (and its run-cycle art) for their whole life on screen.
+    if (key === 'jogger') {
+      h.joggerSprite = Math.random() < 0.5 ? 'joggerMale' : 'joggerFemale';
     }
 
     hazards.push(h);
@@ -3633,7 +3652,8 @@
   // frame swap; `phase` offsets it so a crowd doesn't step in lockstep.
   function drawHazardSprite(spec, x, feetY, screenH, animT, phase) {
     var n = spec.frames.length;
-    var idx = ((Math.floor(animT / HAZARD_FRAME_SECS + phase) % n) + n) % n;
+    var secs = spec.frameSecs || HAZARD_FRAME_SECS; // per-type swap cadence
+    var idx = ((Math.floor(animT / secs + phase) % n) + n) % n;
     var f = spec.frames[idx];
     var scale = screenH / f.figH; // source px -> screen px
     // soft contact shadow so she reads as standing on the promenade
@@ -3682,6 +3702,21 @@
 
     // Group hazards: draw every member
     if (h.members) {
+      // Drunk lads: one real group-of-three billboard with a slow 2-frame
+      // sway. Their movement and collision still run off the members (the
+      // erratic lurch wander and the group's u-span are unchanged); this only
+      // swaps the per-lad placeholders for the single group sprite, centred on
+      // the group and depth-scaled like the other people. The sway comes from
+      // the frame swap and is deliberately not tied 1:1 to the lurch turns.
+      if (h.key === 'drunkLads' && HAZARD_SPRITES.drunkLads.ready) {
+        var dld = depthOf(m);
+        var dls = spreadOf(dld);
+        var dlx = depthToX(promenadeLeft() + promenadeWidth() * h.u, dld);
+        var dly = depthToY(dld);
+        drawHazardSprite(HAZARD_SPRITES.drunkLads, dlx, dly,
+          cfg.width * dls * HAZARD_SPRITES.drunkLads.heightMul, h.age, 0);
+        return;
+      }
       for (var i = 0; i < h.members.length; i++) {
         var mem = h.members[i];
         var dm = m + mem.dz;
@@ -3819,7 +3854,15 @@
     }
 
     if (h.key === 'jogger') {
-      // Tall, thin, leaning hard into the run, white headband
+      // Real 2-frame run cycle, gender fixed per spawn. Foot-anchored and
+      // depth-scaled exactly like the pedestrian; the frame swap animates the
+      // stride (h.u0 desyncs runners so they don't stride in lockstep).
+      var jog = HAZARD_SPRITES[h.joggerSprite] || HAZARD_SPRITES.joggerMale;
+      if (jog.ready) {
+        drawHazardSprite(jog, x2, y2, w2 * jog.heightMul, h.age, h.u0);
+        return;
+      }
+      // Fallback until the art loads: tall, thin, leaning into the run.
       ctx.save();
       ctx.translate(x2, y2);
       ctx.rotate(-0.16);
