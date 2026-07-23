@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.52.0';
+  var VERSION = '0.53.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -2229,7 +2229,7 @@
     // lanes sit left of the promenade, out on the sunken beach. The beach
     // and promenade base textures are static, so these receding objects
     // carry the sense of forward movement instead.
-    lounger:   { interval: 34, offset: 16, lanes: [-0.16, -0.30], jitter: 0.05,
+    lounger:   { interval: 34, offset: 16, lanes: [-0.24, -0.34], jitter: 0.05,
                  width: 88, decor: true, beach: true },
     walkway:   { interval: 57, offset: 41, lanes: [-0.24], jitter: 0.03,
                  width: 170, decor: true, beach: true },
@@ -3990,16 +3990,19 @@
     ctx.fill();
   }
 
-  // Clip the drawing region to the sand side of the sea-wall kerb — the whole
-  // area left of the u = 0 boundary as it recedes from the near edge up to the
-  // horizon. depthToX/depthToY are both affine in depth, so that boundary is a
-  // straight screen line: two projected endpoints define it exactly, extended
-  // below the screen for full coverage. Used to keep beach props (loungers,
-  // walkway boards) from ever spilling across the kerb onto the promenade.
+  // Clip the drawing region to the sand — everything left of the sand's inner
+  // edge, i.e. where the sand actually begins at the BASE of the stepped ledge
+  // (ledgeOuterX), NOT at the promenade wall (wallX). The band between the two
+  // is the boardwalk/ledge; clipping only at wallX let wide props (loungers,
+  // walkway boards) sit their far edge on those steps. This traces the exact
+  // line the sand quad uses in drawBeach: from (ledgeOuterX @ horizon) to
+  // (ledgeOuterX @ near edge, dropped onto the sunken sand plane). depthToX and
+  // sunkenY are both affine in depth, so the boundary is a straight screen
+  // line — two projected endpoints define it, extended below for full cover.
   function clipBeach() {
     var dM = bottomDepth();
-    var x0 = depthToX(wallX(), 0),  y0 = horizonY();
-    var x1 = depthToX(wallX(), dM), y1 = depthToY(dM);
+    var x0 = depthToX(ledgeOuterX(), 0),  y0 = horizonY();
+    var x1 = depthToX(ledgeOuterX(), dM), y1 = sunkenY(dM, dropHeight());
     var slope = (y1 - y0) ? (x1 - x0) / (y1 - y0) : 0;
     var yB = H + 80;
     var xB = x0 + slope * (yB - y0);
