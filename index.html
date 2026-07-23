@@ -530,6 +530,51 @@
     }
     #achievements-screen .btn { margin-top: 8px; }
 
+    /* Stats page — same dark-card language as achievements: DM Mono labels,
+       big Bebas Neue values. */
+    .stat-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: 100%;
+      max-width: 430px;
+      margin: 20px 0 28px;
+    }
+    .stat-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      text-align: left;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(143, 180, 217, 0.18);
+      border-radius: 12px;
+      padding: 16px 18px;
+    }
+    .stat-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      color: #8fb4d9;
+      text-transform: uppercase;
+    }
+    .stat-val-wrap { text-align: right; flex: none; }
+    .stat-value {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 38px;
+      line-height: 0.95;
+      letter-spacing: 0.03em;
+      color: #ffd166;
+    }
+    .stat-sub {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: rgba(255, 209, 102, 0.75);
+      margin-top: 3px;
+    }
+    #stats-screen .btn { margin-top: 8px; }
+
     /* Unobtrusive "change device owner" link on the start screen. */
     .owner-link {
       margin-top: 24px;
@@ -643,6 +688,7 @@
       <button class="btn" id="hand-right">RIGHTY</button>
     </div>
     <button class="ach-link" id="open-achievements">🏆 ACHIEVEMENTS</button>
+    <button class="ach-link" id="open-stats">📊 STATS</button>
     <button class="owner-link" id="owner-change"></button>
   </div>
 
@@ -663,6 +709,12 @@
     <div class="ach-count" id="ach-count"></div>
     <div class="ach-list" id="ach-list"></div>
     <button class="btn" id="ach-back">BACK</button>
+  </div>
+
+  <div id="stats-screen" class="overlay hidden ach-scroll">
+    <div class="owner-title ach-title">STATS</div>
+    <div class="stat-list" id="stat-list"></div>
+    <button class="btn" id="stat-back">BACK</button>
   </div>
 
   <div id="end-screen" class="overlay hidden">

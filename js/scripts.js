@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.53.0';
+  var VERSION = '0.54.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -320,6 +320,7 @@
 
   var score = 0;
   var streak = 0;              // consecutive hazards survived since a stumble
+  var runMaxStreak = 0;        // peak streak this run (for the persistent stat)
   var multUntil = 0;           // hen-bonus points multiplier active until (ms)
   var roses = 0;               // carried roses from the rose seller
 
@@ -448,6 +449,77 @@
         localStorage.setItem(ACHIEVEMENTS_STORE_KEY, JSON.stringify(all));
       }
     } catch (e) {}
+  }
+
+  // ---------------------------------------------------------------------
+  // Player stats — persistent per-owner bests, kept in the same device-
+  // owner-keyed localStorage shape as achievements and ready to map onto a
+  // future Firestore doc (users/<owner>/stats = {...}) without a rebuild.
+  // This is also the single home for the Endless best now: it's folded in
+  // from the old global deathMarchEndlessBest key so nothing is lost.
+  //   maxStreak         best dodge streak in any run, either mode
+  //   maxPoints         best end-of-run score, either mode
+  //   fastestClassic    quickest Classic completion, seconds (Classic only)
+  //   endlessBestDist   furthest Endless distance, metres
+  //   endlessBestScore  score on that furthest Endless run
+  //   updatedAt         last write, ms (Firestore-friendly)
+  // Store shape: { <ownerKey>: { ...the fields above } }
+  // ---------------------------------------------------------------------
+  var STATS_STORE_KEY = 'deathMarchStats';
+  var LEGACY_ENDLESS_BEST_KEY = 'deathMarchEndlessBest';
+
+  function loadStatsAll() {
+    try { return JSON.parse(localStorage.getItem(STATS_STORE_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  // The current owner's stats record (an empty object if none yet).
+  function ownerStats() {
+    if (!deviceOwner) return {};
+    return loadStatsAll()[deviceOwner.key] || {};
+  }
+  function saveOwnerStats(mine) {
+    if (!deviceOwner) return;
+    try {
+      var all = loadStatsAll();
+      all[deviceOwner.key] = mine;
+      localStorage.setItem(STATS_STORE_KEY, JSON.stringify(all));
+    } catch (e) {}
+  }
+
+  // One-time fold-in of the legacy GLOBAL Endless best into this owner's
+  // stats, so the existing high score carries over rather than being lost.
+  // Runs at owner load; only seeds when this owner has no Endless best yet.
+  function migrateOwnerStats() {
+    if (!deviceOwner) return;
+    var mine = ownerStats();
+    if (mine.endlessBestDist !== undefined) return;
+    var legacy = null;
+    try { legacy = JSON.parse(localStorage.getItem(LEGACY_ENDLESS_BEST_KEY)); }
+    catch (e) { legacy = null; }
+    if (legacy && typeof legacy.dist === 'number') {
+      mine.endlessBestDist = legacy.dist;
+      mine.endlessBestScore = typeof legacy.score === 'number' ? legacy.score : 0;
+      mine.updatedAt = Date.now();
+      saveOwnerStats(mine);
+    }
+  }
+
+  // Fold a finished run's results into the owner's persistent bests — called
+  // at the end of every run, both modes. Only writes when a record improves.
+  // (The Endless best distance/score is handled by saveBest in finishRun,
+  // which writes into this same record.)
+  function recordRunStats(mode) {
+    if (!deviceOwner) return;
+    var mine = ownerStats();
+    var changed = false;
+    if (runMaxStreak > (mine.maxStreak || 0)) { mine.maxStreak = runMaxStreak; changed = true; }
+    if (score > (mine.maxPoints || 0)) { mine.maxPoints = score; changed = true; }
+    if (mode === MODE_CLASSIC) {
+      if (typeof mine.fastestClassic !== 'number' || elapsed < mine.fastestClassic) {
+        mine.fastestClassic = elapsed; changed = true;
+      }
+    }
+    if (changed) { mine.updatedAt = Date.now(); saveOwnerStats(mine); }
   }
 
   var noticeText = '';
@@ -666,22 +738,25 @@
   var endlessBestEl = document.getElementById('endless-best');
 
   // ---------------------------------------------------------------------
-  // Endless best — persisted locally so it survives between sessions.
-  // Distance is the headline stat (it's what Endless is about); the score
-  // rides along for the share text. localStorage can be unavailable
-  // (private browsing) so every touch is wrapped.
+  // Endless best — distance is the headline stat (it's what Endless is
+  // about); the score rides along for the share text. Now stored per owner
+  // inside the consolidated player-stats record (see above), migrated from
+  // the old global key so it survives. Same {dist, score} interface as
+  // before, so finishRun / title / share code is unchanged.
   // ---------------------------------------------------------------------
-  var BEST_KEY = 'deathMarchEndlessBest';
-
   function loadBest() {
-    try {
-      var v = JSON.parse(localStorage.getItem(BEST_KEY));
-      return (v && typeof v.dist === 'number') ? v : null;
-    } catch (e) { return null; }
+    var mine = ownerStats();
+    return (typeof mine.endlessBestDist === 'number')
+      ? { dist: mine.endlessBestDist, score: mine.endlessBestScore || 0 }
+      : null;
   }
 
   function saveBest(v) {
-    try { localStorage.setItem(BEST_KEY, JSON.stringify(v)); } catch (e) {}
+    var mine = ownerStats();
+    mine.endlessBestDist = v.dist;
+    mine.endlessBestScore = v.score;
+    mine.updatedAt = Date.now();
+    saveOwnerStats(mine);
   }
 
   function refreshBestOnTitle() {
@@ -763,6 +838,7 @@
     inputLog.length = 0;
     score = 0;
     streak = 0;
+    runMaxStreak = 0;
     hudScoreDisp = 0;
     hudStreakDisp = 0;
     scorePops.length = 0;
@@ -984,6 +1060,10 @@
       if (endBestEl) endBestEl.textContent = '';
       if (copyScoreBtn) copyScoreBtn.style.display = 'none';
     }
+
+    // Persist this run's bests (peak streak, top score, fastest Classic) —
+    // both modes, only overwriting a record that was actually beaten.
+    recordRunStats(gameMode);
 
     endScreen.classList.remove('hidden');
   }
@@ -1693,6 +1773,7 @@
       saveOwner(pendingOwner);
       deviceOwner = loadOwner();
       loadOwnerAchievements(); // switch to the new owner's records
+      migrateOwnerStats();     // fold in any legacy Endless best
       refreshOwnerLine();
       closeOwnerSetup();
     });
@@ -1713,6 +1794,7 @@
   // Boot: known owner → straight to the start screen; unknown → set it up.
   deviceOwner = loadOwner();
   loadOwnerAchievements();
+  migrateOwnerStats();
   refreshOwnerLine();
   if (!deviceOwner) openOwnerSetup();
 
@@ -1827,6 +1909,92 @@
     achBackBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       closeAchievements();
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Stats page — the persistent player bests, in the same dark-card visual
+  // language as achievements (Bebas Neue values, DM Mono labels). Reads the
+  // owner's stats record live each time it opens.
+  // ---------------------------------------------------------------------
+  var statsScreen = document.getElementById('stats-screen');
+  var statListEl = document.getElementById('stat-list');
+  var statBackBtn = document.getElementById('stat-back');
+  var openStatsBtn = document.getElementById('open-stats');
+
+  // Seconds -> "1:23.4" for a minute or more, else "83.4s"; em dash if unset.
+  function formatStatTime(sec) {
+    if (typeof sec !== 'number') return '—';
+    if (sec >= 60) {
+      var m = Math.floor(sec / 60);
+      var s = sec - m * 60;
+      return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+    }
+    return sec.toFixed(1) + 's';
+  }
+
+  function buildStatsPage() {
+    if (!statListEl) return;
+    var mine = ownerStats();
+    var hasEndless = typeof mine.endlessBestDist === 'number';
+    var rows = [
+      { label: 'MAX STREAK',
+        value: typeof mine.maxStreak === 'number' ? String(mine.maxStreak) : '—' },
+      { label: 'MAX POINTS',
+        value: typeof mine.maxPoints === 'number' ? mine.maxPoints + ' PTS' : '—' },
+      { label: 'FASTEST CLASSIC', value: formatStatTime(mine.fastestClassic) },
+      { label: 'ENDLESS BEST',
+        value: hasEndless ? mine.endlessBestDist + 'M' : '—',
+        sub: hasEndless ? (mine.endlessBestScore || 0) + ' PTS' : '' },
+    ];
+
+    statListEl.textContent = '';
+    rows.forEach(function (r) {
+      var card = document.createElement('div');
+      card.className = 'stat-card';
+
+      var label = document.createElement('div');
+      label.className = 'stat-label';
+      label.textContent = r.label;
+      card.appendChild(label);
+
+      var valWrap = document.createElement('div');
+      valWrap.className = 'stat-val-wrap';
+      var val = document.createElement('div');
+      val.className = 'stat-value';
+      val.textContent = r.value;
+      valWrap.appendChild(val);
+      if (r.sub) {
+        var sub = document.createElement('div');
+        sub.className = 'stat-sub';
+        sub.textContent = r.sub;
+        valWrap.appendChild(sub);
+      }
+      card.appendChild(valWrap);
+      statListEl.appendChild(card);
+    });
+  }
+
+  function openStats() {
+    buildStatsPage();
+    if (startScreen) startScreen.classList.add('hidden');
+    if (statsScreen) statsScreen.classList.remove('hidden');
+  }
+  function closeStats() {
+    if (statsScreen) statsScreen.classList.add('hidden');
+    if (startScreen) startScreen.classList.remove('hidden');
+  }
+
+  if (openStatsBtn) {
+    openStatsBtn.addEventListener('click', function (e) {
+      e.stopPropagation(); // must not bubble to the tap-to-start handler
+      openStats();
+    });
+  }
+  if (statBackBtn) {
+    statBackBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeStats();
     });
   }
 
@@ -2767,6 +2935,7 @@
     if (h.hitPlayer) return; // they got you — no bonus, streak already reset
 
     streak += 1;
+    if (streak > runMaxStreak) runMaxStreak = streak; // peak for the stat
     var streakMult = 1 + Math.min(streak, 20) * 0.1;
     addScore(DODGE_POINTS * streakMult);
 
