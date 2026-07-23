@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.49.0';
+  var VERSION = '0.50.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -1862,8 +1862,12 @@
     drunkLads:  { speed: 1.4, spawn: [45, 75],  width: 27, lurch: [0.16, 0.5, 1.3],
                   group: [2, 3],
                   effect: 'stumble', penalty: 2, weight: 13, colour: '#4d96ff' },
+    // Street vendors only — the rose seller and the looky looky men. (The
+    // plain busker act was removed. Its type weight was 10 with 40% of rolls
+    // landing on the plain variant, so weight 6 here leaves the vendors'
+    // effective spawn frequency exactly what it was.)
     performer:  { speed: 0.15, spawn: [50, 110], width: 24, drift: 0, static: true,
-                  effect: 'stumble', penalty: 2, weight: 10, colour: '#25ced1' },
+                  effect: 'stumble', penalty: 2, weight: 6 },
     puke:       { speed: 0,   spawn: [40, 70],  width: 44, drift: 0, ground: true,
                   effect: 'skid', penalty: 0, weight: 13, colour: '#8aa62f' },
     // Weight 0 — never in the normal mix; force-spawned in the end zone
@@ -2398,12 +2402,14 @@
       }
     }
 
-    // Street performers come in flavours: the plain act, the rose
-    // seller, and the looky looky men (three different wares)
+    // Street vendors come in two flavours: the rose seller and the looky
+    // looky men (three different wares). The 0.417 split preserves each
+    // vendor's original spawn share now that the plain act is gone
+    // (previously rose 0.25 / looky 0.35 of a wider roll).
     if (key === 'performer') {
       var roll = Math.random();
       h.variant = forceVariant ||
-        (roll < 0.4 ? 'plain' : (roll < 0.65 ? 'roseSeller' : 'lookyMan'));
+        (roll < 0.417 ? 'roseSeller' : 'lookyMan');
       if (h.variant === 'lookyMan') {
         var wares = ['shades', 'hat', 'chain'];
         h.wares = wares[Math.floor(Math.random() * wares.length)];
@@ -2533,8 +2539,8 @@
       if (skidzSoiled && !cfg.ground && !cfg.static && !h.harmless) {
         // Everyone can smell it: moving hazards abandon their own patterns
         // and home in on the player for the rest of the run. Static vendors
-        // (rose seller, looky looky men, street performers) are exempt —
-        // they can't move, so they stay put and never heckle.
+        // (the rose seller and looky looky men) are exempt — they can't
+        // move, so they stay put and never heckle.
         if (!h.soilLine) {
           h.soilLine = SOIL_LINES[Math.floor(Math.random() * SOIL_LINES.length)];
         }
@@ -3916,29 +3922,6 @@
       }
       // Speech bubble, always visible while he's on screen
       drawBubble(x2, y2 - w2 * 2.6, 'Looky looky', w2);
-      return;
-    }
-
-    if (h.key === 'performer') {
-      // Wide-brimmed hat, arms out frozen mid-act, pitch cone beside
-      drawFigure(x2, y2, w2, w2 * 1.4, cfg.colour);
-      ctx.strokeStyle = cfg.colour; // outstretched arms
-      ctx.lineWidth = Math.max(2, w2 * 0.14);
-      ctx.beginPath();
-      ctx.moveTo(x2 - w2 * 0.95, y2 - w2 * 1.35);
-      ctx.lineTo(x2 + w2 * 0.95, y2 - w2 * 1.35);
-      ctx.stroke();
-      ctx.fillStyle = '#2b2d42'; // hat brim
-      ctx.beginPath();
-      ctx.ellipse(x2, y2 - w2 * 1.4 - w2 * 0.55, w2 * 0.55, w2 * 0.14, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#ffd166'; // pitch cone
-      ctx.beginPath();
-      ctx.moveTo(x2 + w2 * 1.1, y2);
-      ctx.lineTo(x2 + w2 * 1.5, y2);
-      ctx.lineTo(x2 + w2 * 1.3, y2 - w2 * 0.6);
-      ctx.closePath();
-      ctx.fill();
       return;
     }
 
