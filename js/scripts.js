@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.54.0';
+  var VERSION = '0.55.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -3547,6 +3547,21 @@
     return b >= start && b < start + ROAD_WIDTH_BLOCKS;
   }
 
+  // Skyline silhouette palette (opaque, lerped toward the backing as a block
+  // nears so it dissolves into the flat facade rather than intruding). Kept as
+  // RGB triples so mixRGB can blend them without per-draw alpha (opaque fills
+  // mean the seamless-tiling silhouettes leave no overlap seams).
+  var BACKING_RGB = [15, 28, 51];  // #0f1c33 — the pass-1a facade backing
+  var SKY_TOP_A = [27, 51, 88];    // #1b3358 — lit roofline, even blocks
+  var SKY_TOP_B = [33, 59, 100];   // #213b64 — lit roofline, odd blocks
+  var SKY_BASE = [15, 31, 57];     // #0f1f39 — near-backing at the base
+  var SKY_ROOF = [11, 24, 48];     // #0b1830 — the thin roof lip
+  function mixRGB(a, b, t) {
+    return 'rgb(' + Math.round(a[0] + (b[0] - a[0]) * t) + ',' +
+                    Math.round(a[1] + (b[1] - a[1]) * t) + ',' +
+                    Math.round(a[2] + (b[2] - a[2]) * t) + ')';
+  }
+
   function drawBuildings() {
     var right = promenadeLeft() + promenadeWidth();
     var outer = right + buildingWidth();
@@ -3614,47 +3629,59 @@
         continue; // no windows on road blocks
       }
 
-      // A distant-building silhouette for this block. These belong to the FAR
-      // skyline only: each fades out as its block approaches so the foreground
-      // is just the illustrated sprites over the dark facade backing — never a
-      // big flat lighter-navy slab low on screen (the near, full-spread
-      // rectangles were what read as solid blocks). Drawn far-to-near, the
-      // still-distant silhouettes overlap into a plausible ridgeline.
-      //   silAlpha: 1 while distant (small spread), ramping to 0 by the time a
-      //   block is near enough that its silhouette would be a foreground slab.
-      var silAlpha = clamp01((0.58 - s) / (0.58 - 0.40));
-      if (silAlpha > 0.01) {
+      // Distant skyline for this block. Instead of a lone rectangle — which at
+      // mid-range read as an isolated dark box with a dot-grid of windows,
+      // stranded between the illustrated buildings — each block's silhouette
+      // TILES right up to the next nearer block's edge, so neighbours always
+      // connect into one continuous ridgeline: a seamless distant cityscape,
+      // never standalone boxes. It's filled OPAQUE and simply blended toward
+      // the backing colour as a block nears (dissolving into the flat facade
+      // instead of intruding on the foreground); opaque fills mean the
+      // overlapping tiles leave no alpha seams the way per-block fades did.
+      var t = clamp01((0.58 - s) / (0.58 - 0.40)); // 1 = full skyline, 0 = gone
+      if (t > 0.01) {
         var xL = depthToX(right, d);
-        var bw = buildingWidth() * s * (0.85 + rand(b * 1.7) * 0.6);
+        // Right edge = the next nearer block's left edge, so the silhouettes
+        // always meet. Don't span a side street (leave that gap in the ridge).
+        var xNext = depthToX(right, depthOf((b - 1) * BUILDING_METRES - distance));
+        var bw = xNext - xL;
+        if (!(bw > 1)) bw = buildingWidth() * s;               // near-clamp safety
+        if (isRoadBlock(b - 1)) bw = Math.min(bw, buildingWidth() * s);
+        else bw += 1;                                           // 1px overlap, no seam
         var hgt = (H * 0.14 + rand(b + 57) * H * 0.16) * s;
-        ctx.save();
-        ctx.globalAlpha = silAlpha;
-        // Vertical gradient — a touch lighter at the roofline (catching the
-        // night sky), fading to the backing colour at the base — so the mass
-        // reads as a building against the sky, not a flat rectangle.
+
+        // Opaque fill lerped backing -> lit skyline tone; roofline a touch
+        // lighter to catch the night sky, base ~= backing so it melts in.
         var grd = ctx.createLinearGradient(0, y - hgt, 0, y);
-        grd.addColorStop(0, (b % 2 === 0) ? '#1b3358' : '#213b64');
-        grd.addColorStop(1, '#0f1f39');
+        grd.addColorStop(0, mixRGB(BACKING_RGB, (b % 2 === 0) ? SKY_TOP_A : SKY_TOP_B, t));
+        grd.addColorStop(1, mixRGB(BACKING_RGB, SKY_BASE, t));
         ctx.fillStyle = grd;
         ctx.fillRect(xL, y - hgt, bw, hgt);
-        // flat roof lip
-        ctx.fillStyle = '#0b1830';
+        // thin roof lip
+        ctx.fillStyle = mixRGB(BACKING_RGB, SKY_ROOF, t);
         ctx.fillRect(xL, y - hgt, bw, Math.max(1, hgt * 0.03));
 
-        var cols = 4, rows = 6;
-        var winW = bw * 0.1;
-        var winH = hgt * 0.045;
-        var gapX = (bw - cols * winW) / (cols + 1);
-        var gapY = (hgt * 0.9 - rows * winH) / (rows + 1);
-        for (var r = 0; r < rows; r++) {
-          for (var c = 0; c < cols; c++) {
-            if (rand(b * 31 + r * 7 + c * 3) < 0.42) continue; // dark window
-            ctx.fillStyle = 'rgba(255, 209, 102, 0.5)';
-            ctx.fillRect(xL + gapX + c * (winW + gapX),
-                         y - hgt * 0.95 + gapY + r * (winH + gapY), winW, winH);
+        // A few dim, scattered lit windows — only on the solidly-distant ridge
+        // (they fade IN with t), so the transition zone shows just the blending
+        // dark mass with no faint floating dots, and they never read as a
+        // bright regular grid on a box.
+        var winAlpha = 0.45 * clamp01((t - 0.4) / 0.4);
+        if (winAlpha > 0.02) {
+          var winStyle = 'rgba(255, 209, 102, ' + winAlpha.toFixed(3) + ')';
+          var cols = 4, rows = 6;
+          var winW = bw * 0.09;
+          var winH = hgt * 0.04;
+          var gapX = (bw - cols * winW) / (cols + 1);
+          var gapY = (hgt * 0.9 - rows * winH) / (rows + 1);
+          for (var r = 0; r < rows; r++) {
+            for (var c = 0; c < cols; c++) {
+              if (rand(b * 31 + r * 7 + c * 3) < 0.6) continue; // mostly dark
+              ctx.fillStyle = winStyle;
+              ctx.fillRect(xL + gapX + c * (winW + gapX),
+                           y - hgt * 0.95 + gapY + r * (winH + gapY), winW, winH);
+            }
           }
         }
-        ctx.restore();
       }
     }
 
