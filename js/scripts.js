@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.56.0';
+  var VERSION = '0.57.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -408,6 +408,15 @@
     { id: 'sharkFed', name: 'The Shark Has Fed',
       desc: 'Meet a hen party with Adam along — the shark has fed, all the little fish are happy.',
       secret: true, image: 'images/achievements/shark-fed.png' },
+    { id: 'robbyOverboard', name: 'Robby Overboard',
+      desc: 'Send Robby after the island. A passing pedalo hauls him out — the island remains unconquered.',
+      secret: true, image: 'images/achievements/robby-overboard.png' },
+    { id: 'rubbishSpanish', name: 'Talking Rubbish Spanish',
+      desc: 'Take Steve into Los Gemelos and let him order. Somehow: a mountain of ice cream.',
+      secret: true, image: 'images/achievements/rubbish-spanish.png' },
+    { id: 'justForTheBants', name: 'Just for the Bants',
+      desc: 'Playing as Lee, bite clean into a rose. That’ll be the whole bunch, then.',
+      secret: true, image: 'images/achievements/just-for-the-bants.png' },
   ];
   var ACHIEVEMENT_MAP = {};
   ACHIEVEMENT_DEFS.forEach(function (d) { ACHIEVEMENT_MAP[d.id] = d; });
@@ -2902,6 +2911,7 @@
       // other comics. The carried-rose grant below is unchanged.
       queueLeeRoseComic();
       markHidden('leeRose');
+      unlockWithImage('justForTheBants', 'Just for the Bants', true);
     }
     roses += 1;
     notify('ROSE COLLECTED — you are carrying a rose', 4200);
@@ -3305,9 +3315,11 @@
     if (leadChar === 'robby') {
       showMessage('I think I can swim that');
       queueIslandComic();
+      unlockWithImage('robbyOverboard', 'Robby Overboard', true);
     } else if (squadIncludes('robby')) {
       showMessage('Robby, I think you could swim that');
       queueIslandComic();
+      unlockWithImage('robbyOverboard', 'Robby Overboard', true);
     } else {
       // No Robby, no swim — just the banter, no comic panels
       showMessage("I think Robby could swim that, shame he isn't here");
@@ -3358,6 +3370,7 @@
           drunk = Math.max(0, drunk - STEVE_BOOST);
           queueSteveComic();
           markHidden('steveIceCream'); // the full interlude only, not the absent popup
+          unlockWithImage('rubbishSpanish', 'Talking Rubbish Spanish', true);
         } else {
           // Steve's not with you — you bump into him outside, ordering
           drunk = Math.max(0, drunk - STEVE_BOOST_SMALL);
