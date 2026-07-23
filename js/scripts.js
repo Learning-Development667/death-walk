@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.48.0';
+  var VERSION = '0.49.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -2135,14 +2135,29 @@
   (function loadEnvTextures() {
     for (var key in ENV_TEXTURES) {
       (function (t) {
-        var img = new Image();
-        img.onload = function () {
-          var oc = document.createElement('canvas');
-          oc.width = t.tile; oc.height = t.tile;
-          oc.getContext('2d').drawImage(img, 0, 0, t.tile, t.tile);
-          try { t.pattern = ctx.createPattern(oc, 'repeat'); } catch (e) { t.pattern = null; }
-        };
-        img.src = 'images/environment/' + t.file;
+        // Ground textures are large (~1MB each). A single interrupted or
+        // failed fetch used to leave t.pattern null forever, stranding the
+        // surface on its grid/flat fallback for the whole session with no
+        // retry. Load with retries (cache-busting each attempt) so a flaky
+        // first fetch self-heals and the real paving/sand/sea shows reliably.
+        var attempts = 0;
+        function attempt() {
+          attempts++;
+          var img = new Image();
+          img.onload = function () {
+            var oc = document.createElement('canvas');
+            oc.width = t.tile; oc.height = t.tile;
+            oc.getContext('2d').drawImage(img, 0, 0, t.tile, t.tile);
+            try { t.pattern = ctx.createPattern(oc, 'repeat'); } catch (e) { t.pattern = null; }
+            if (!t.pattern && attempts < 5) setTimeout(attempt, 400 * attempts);
+          };
+          img.onerror = function () {
+            if (attempts < 5) setTimeout(attempt, 400 * attempts);
+          };
+          img.src = 'images/environment/' + t.file +
+            (attempts > 1 ? '?r=' + attempts : '');
+        }
+        attempt();
       })(ENV_TEXTURES[key]);
     }
   })();
@@ -3402,32 +3417,47 @@
         continue; // no windows on road blocks
       }
 
-      // A distant-building silhouette for this block: varied height and
-      // width, a slightly lighter shade than the base quad so its outline
-      // reads, with a grid of SMALL dim windows kept inside its bounds.
-      // Far-to-near, so nearer silhouettes overlap into a plausible skyline
-      // rather than floating window slabs on a flat wall.
-      var xL = depthToX(right, d);
-      var bw = buildingWidth() * s * (0.85 + rand(b * 1.7) * 0.6);
-      var hgt = (H * 0.14 + rand(b + 57) * H * 0.16) * s;
-      ctx.fillStyle = (b % 2 === 0) ? '#16294a' : '#1a3054';
-      ctx.fillRect(xL, y - hgt, bw, hgt);
-      // flat roof lip
-      ctx.fillStyle = '#0e1c33';
-      ctx.fillRect(xL, y - hgt, bw, Math.max(1, hgt * 0.03));
+      // A distant-building silhouette for this block. These belong to the FAR
+      // skyline only: each fades out as its block approaches so the foreground
+      // is just the illustrated sprites over the dark facade backing — never a
+      // big flat lighter-navy slab low on screen (the near, full-spread
+      // rectangles were what read as solid blocks). Drawn far-to-near, the
+      // still-distant silhouettes overlap into a plausible ridgeline.
+      //   silAlpha: 1 while distant (small spread), ramping to 0 by the time a
+      //   block is near enough that its silhouette would be a foreground slab.
+      var silAlpha = clamp01((0.58 - s) / (0.58 - 0.40));
+      if (silAlpha > 0.01) {
+        var xL = depthToX(right, d);
+        var bw = buildingWidth() * s * (0.85 + rand(b * 1.7) * 0.6);
+        var hgt = (H * 0.14 + rand(b + 57) * H * 0.16) * s;
+        ctx.save();
+        ctx.globalAlpha = silAlpha;
+        // Vertical gradient — a touch lighter at the roofline (catching the
+        // night sky), fading to the backing colour at the base — so the mass
+        // reads as a building against the sky, not a flat rectangle.
+        var grd = ctx.createLinearGradient(0, y - hgt, 0, y);
+        grd.addColorStop(0, (b % 2 === 0) ? '#1b3358' : '#213b64');
+        grd.addColorStop(1, '#0f1f39');
+        ctx.fillStyle = grd;
+        ctx.fillRect(xL, y - hgt, bw, hgt);
+        // flat roof lip
+        ctx.fillStyle = '#0b1830';
+        ctx.fillRect(xL, y - hgt, bw, Math.max(1, hgt * 0.03));
 
-      var cols = 4, rows = 6;
-      var winW = bw * 0.1;
-      var winH = hgt * 0.045;
-      var gapX = (bw - cols * winW) / (cols + 1);
-      var gapY = (hgt * 0.9 - rows * winH) / (rows + 1);
-      for (var r = 0; r < rows; r++) {
-        for (var c = 0; c < cols; c++) {
-          if (rand(b * 31 + r * 7 + c * 3) < 0.42) continue; // dark window
-          ctx.fillStyle = 'rgba(255, 209, 102, 0.5)';
-          ctx.fillRect(xL + gapX + c * (winW + gapX),
-                       y - hgt * 0.95 + gapY + r * (winH + gapY), winW, winH);
+        var cols = 4, rows = 6;
+        var winW = bw * 0.1;
+        var winH = hgt * 0.045;
+        var gapX = (bw - cols * winW) / (cols + 1);
+        var gapY = (hgt * 0.9 - rows * winH) / (rows + 1);
+        for (var r = 0; r < rows; r++) {
+          for (var c = 0; c < cols; c++) {
+            if (rand(b * 31 + r * 7 + c * 3) < 0.42) continue; // dark window
+            ctx.fillStyle = 'rgba(255, 209, 102, 0.5)';
+            ctx.fillRect(xL + gapX + c * (winW + gapX),
+                         y - hgt * 0.95 + gapY + r * (winH + gapY), winW, winH);
+          }
         }
+        ctx.restore();
       }
     }
 
@@ -3931,6 +3961,28 @@
     ctx.fill();
   }
 
+  // Clip the drawing region to the sand side of the sea-wall kerb — the whole
+  // area left of the u = 0 boundary as it recedes from the near edge up to the
+  // horizon. depthToX/depthToY are both affine in depth, so that boundary is a
+  // straight screen line: two projected endpoints define it exactly, extended
+  // below the screen for full coverage. Used to keep beach props (loungers,
+  // walkway boards) from ever spilling across the kerb onto the promenade.
+  function clipBeach() {
+    var dM = bottomDepth();
+    var x0 = depthToX(wallX(), 0),  y0 = horizonY();
+    var x1 = depthToX(wallX(), dM), y1 = depthToY(dM);
+    var slope = (y1 - y0) ? (x1 - x0) / (y1 - y0) : 0;
+    var yB = H + 80;
+    var xB = x0 + slope * (yB - y0);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(xB, yB);
+    ctx.lineTo(-80, yB);
+    ctx.lineTo(-80, y0);
+    ctx.closePath();
+    ctx.clip();
+  }
+
   function drawScenery(it, m) {
     var cfg = it.cfg;
     var d = depthOf(m);
@@ -3939,8 +3991,14 @@
     var y = depthToY(d);
     var w = cfg.width * s;
 
-    // Beach props stand on the sunken sand plane, not the promenade deck.
-    if (cfg.beach) y = sunkenY(d, dropHeight() * 1.15);
+    // Beach props stand on the sunken sand plane, not the promenade deck, and
+    // are clipped to the sand side of the kerb so they can never render across
+    // the sea wall onto the walkway — no exceptions, at any depth.
+    if (cfg.beach) {
+      y = sunkenY(d, dropHeight() * 1.15);
+      ctx.save();
+      clipBeach();
+    }
 
     if (it.key === 'lounger') {
       var lg = HAZARD_SPRITES.lounger;
@@ -3954,6 +4012,7 @@
         ctx.drawImage(lf.canvas, x - lf.cx * lsc, y - lf.feetY * lsc,
           lf.w * lsc, lf.h * lsc);
       }
+      if (cfg.beach) ctx.restore();
       return;
     }
 
@@ -3976,6 +4035,7 @@
           y - (wf.feetY - wf.figH / 2) * wsc * 0.45, // flatten vertically
           wf.w * wsc, wf.h * wsc * 0.45);
       }
+      if (cfg.beach) ctx.restore();
       return;
     }
 
