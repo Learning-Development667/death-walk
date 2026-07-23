@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.47.0';
+  var VERSION = '0.48.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -192,6 +192,7 @@
   function triggerTumble() {
     wallPressT = 0;
     tumbleCount += 1;
+    sfx('tumble');
     tumbleUntil = frameNow + TUMBLE_MS;
     invulnUntil = frameNow + TUMBLE_MS + 1200;
     shakeUntil = frameNow + 750;
@@ -467,6 +468,7 @@
     if (achievements[id]) return false;
     achievements[id] = true;
     recordAchievement(id);
+    sfx('achievement');
     if (important) showMessage('ACHIEVEMENT UNLOCKED: ' + label);
     else notify('ACHIEVEMENT: ' + label);
     return true;
@@ -539,8 +541,118 @@
     return frameNow < multUntil ? CHAT_MULT : 1;
   }
 
+  // ---------------------------------------------------------------------
+  // Sound — Web Audio API, every effect generated in code (no audio
+  // files). Kept short, soft and comedic; a mute toggle lives in the
+  // footer and persists per device.
+  // ---------------------------------------------------------------------
+  var SOUND_KEY = 'deathMarchMuted';
+  var soundMuted = false;
+  try { soundMuted = localStorage.getItem(SOUND_KEY) === '1'; } catch (e) {}
+  var audioCtx = null;
+
+  // Create/resume the context — must happen on a user gesture, so this is
+  // wired to pointerdown below and to the mute button.
+  function ensureAudio() {
+    if (soundMuted) return;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!audioCtx) { try { audioCtx = new AC(); } catch (e) { return; } }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  }
+
+  // One enveloped oscillator note, optionally sliding in pitch.
+  function tone(freq, startIn, dur, opts) {
+    if (!audioCtx || soundMuted) return;
+    opts = opts || {};
+    var t0 = audioCtx.currentTime + (startIn || 0);
+    var osc = audioCtx.createOscillator();
+    var g = audioCtx.createGain();
+    osc.type = opts.type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    if (opts.slideTo) {
+      osc.frequency.exponentialRampToValueAtTime(opts.slideTo, t0 + dur);
+    }
+    var vol = opts.vol || 0.07;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.05);
+  }
+
+  // The game's named moments. Comedy-soft: triangles and gentle slides,
+  // nothing harsh.
+  function sfx(name) {
+    if (soundMuted || !audioCtx) return;
+    switch (name) {
+      case 'point': // quick cheerful blip as points land in the counter
+        tone(880, 0, 0.09, { type: 'triangle', vol: 0.045, slideTo: 1320 });
+        break;
+      case 'stumble': // clumsy two-step "bwoop" down
+        tone(230, 0, 0.14, { type: 'square', vol: 0.05, slideTo: 120 });
+        tone(170, 0.09, 0.16, { type: 'square', vol: 0.04, slideTo: 90 });
+        break;
+      case 'tumble': // long slide off the ledge, then a soft thud
+        tone(520, 0, 0.45, { type: 'sawtooth', vol: 0.05, slideTo: 85 });
+        tone(70, 0.4, 0.2, { type: 'square', vol: 0.08 });
+        break;
+      case 'achievement': // little rising arpeggio
+        tone(660, 0, 0.14, { type: 'triangle', vol: 0.06 });
+        tone(880, 0.09, 0.14, { type: 'triangle', vol: 0.06 });
+        tone(1100, 0.18, 0.2, { type: 'triangle', vol: 0.07 });
+        break;
+      case 'finishWin': // four-note seaside fanfare (Daytona / chips)
+        tone(523, 0, 0.2, { type: 'triangle', vol: 0.07 });
+        tone(659, 0.12, 0.2, { type: 'triangle', vol: 0.07 });
+        tone(784, 0.24, 0.2, { type: 'triangle', vol: 0.07 });
+        tone(1046, 0.36, 0.34, { type: 'triangle', vol: 0.08 });
+        break;
+      case 'finishLose': // gentle descending "aww" (old town / out of beers)
+        tone(392, 0, 0.26, { type: 'square', vol: 0.045 });
+        tone(330, 0.16, 0.26, { type: 'square', vol: 0.045 });
+        tone(262, 0.32, 0.4, { type: 'square', vol: 0.05 });
+        break;
+    }
+  }
+
+  var muteBtn = document.getElementById('mute-btn');
+  function reflectMute() {
+    if (muteBtn) muteBtn.textContent = soundMuted ? '🔇' : '🔊';
+  }
+  if (muteBtn) {
+    reflectMute();
+    muteBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      soundMuted = !soundMuted;
+      try { localStorage.setItem(SOUND_KEY, soundMuted ? '1' : '0'); } catch (err) {}
+      if (!soundMuted) { ensureAudio(); sfx('point'); }
+      reflectMute();
+    });
+  }
+  document.addEventListener('pointerdown', ensureAudio, { passive: true });
+
+  // ---------------------------------------------------------------------
+  // Score + the HUD's animated counter. Every gameplay award funnels
+  // through addScore, which also spawns a floating "+N" popup anchored at
+  // the PTS counter (HUD zone only — never over the busy gameplay view);
+  // the displayed number eases up to meet it as it lands.
+  // ---------------------------------------------------------------------
+  var hudScoreDisp = 0;    // displayed PTS, eases toward the real score
+  var hudStreakDisp = 0;   // displayed streak, same treatment
+  var scorePops = [];      // {amt, born}
+  var SCORE_POP_MS = 750;
+
   function addScore(points) {
-    score += Math.round(points * scoreMult());
+    var pts = Math.round(points * scoreMult());
+    score += pts;
+    if (pts !== 0) {
+      scorePops.push({ amt: pts, born: frameNow });
+      if (scorePops.length > 4) scorePops.shift(); // keep the HUD tidy
+      sfx('point');
+    }
   }
 
   var startScreen = document.getElementById('start-screen');
@@ -651,6 +763,9 @@
     inputLog.length = 0;
     score = 0;
     streak = 0;
+    hudScoreDisp = 0;
+    hudStreakDisp = 0;
+    scorePops.length = 0;
     multUntil = 0;
     roses = 0;
     squadItems.shades = false;
@@ -795,6 +910,7 @@
 
   function finishRun(ending) {
     state = STATE_DONE;
+    sfx(ending === 'daytona' || ending === 'chips' ? 'finishWin' : 'finishLose');
 
     if (ending === 'chips') addScore(CHIP_POINTS);
     // Endless scores by how far you got, on top of what you collected
@@ -1818,6 +1934,14 @@
     scooter2:     { files: ['scooter-2.png'], heightMul: 1.7, frames: [], ready: false },
     scooter3:     { files: ['scooter-3.png'], heightMul: 1.7, frames: [], ready: false },
     scooter4:     { files: ['scooter-4.png'], heightMul: 1.7, frames: [], ready: false },
+    // Parallax scenery props (images/environment/): the beach and promenade
+    // base textures are static, so these discrete, depth-scaled objects are
+    // what sells forward motion. Loungers/bins are billboards; the walkway
+    // boards and worn-tile patch are flat ground decals (like puke).
+    lounger:      { files: ['sun-lounger.png'],     dir: 'images/environment/', frames: [], ready: false },
+    blueBin:      { files: ['blue-bin.png'],        dir: 'images/environment/', frames: [], ready: false },
+    walkway:      { files: ['walkway-texture.png'], dir: 'images/environment/', frames: [], ready: false },
+    tilePatch:    { files: ['tile-texture.png'],    dir: 'images/environment/', frames: [], ready: false },
   };
   // Which vendor sprite each looky-looky wares variant uses.
   var LOOKY_SPRITE = { shades: 'vendorShades', hat: 'vendorHat', chain: 'vendorChain' };
@@ -1951,7 +2075,7 @@
             ok = false;
             if (++done === spec.files.length) spec.ready = false;
           };
-          img.src = 'images/hazards/' + file;
+          img.src = (spec.dir || 'images/hazards/') + file;
         });
       })(HAZARD_SPRITES[key]);
     }
@@ -1967,9 +2091,10 @@
   var BUILDING_FILES = ['building-1.png', 'building-2.png', 'building-3.png',
                         'building-4.png', 'building-5.png', 'building-6.png'];
   var BUILDING_WIDTH_MUL = 1.35; // building draw width as a multiple of a block
-  var BUILDING_STRIDE = 3;       // place a sprite every N blocks so each building
+  var BUILDING_STRIDE = 2;       // place a sprite every N blocks so each building
                                  // stands at its own spot instead of bunching/
-                                 // clipping into the one behind it
+                                 // clipping into the one behind it (2 keeps the
+                                 // frontage full; verified clipping-free)
   var BUILDING_SPRITES = [];  // index -> prepared frame (or undefined until loaded)
   (function loadBuildings() {
     BUILDING_FILES.forEach(function (file, i) {
@@ -2068,6 +2193,18 @@
              width: 30, hit: 0.5, penalty: 2 },
     bench: { interval: 48, offset: 30, lanes: [0.07], jitter: 0.02,
              width: 38, hit: 0.9, penalty: 2 },
+    // Parallax motion-cue props (decor: true = never collide). Negative
+    // lanes sit left of the promenade, out on the sunken beach. The beach
+    // and promenade base textures are static, so these receding objects
+    // carry the sense of forward movement instead.
+    lounger:   { interval: 34, offset: 16, lanes: [-0.16, -0.30], jitter: 0.05,
+                 width: 88, decor: true, beach: true },
+    walkway:   { interval: 57, offset: 41, lanes: [-0.24], jitter: 0.03,
+                 width: 170, decor: true, beach: true },
+    blueBin:   { interval: 43, offset: 24, lanes: [0.965, 0.035], jitter: 0.008,
+                 width: 17, decor: true },
+    tilePatch: { interval: 61, offset: 36, lanes: [0.32, 0.62], jitter: 0.1,
+                 width: 78, decor: true },
   };
 
   function sceneryU(cfg, k) {
@@ -2330,6 +2467,7 @@
     shakeAmp = 6;
     flashUntil = frameNow + STUMBLE_FLASH_MS;
     streak = 0;             // a real collision breaks the dodge streak
+    sfx('stumble');
 
     if (gameMode === MODE_ENDLESS) {
       // A beer down instead of a time penalty; out of beers = out of run
@@ -2460,11 +2598,14 @@
       h.prevMA = mA;
     }
 
-    // Fixed scenery collides like any stationary hazard: a stumble
+    // Fixed scenery collides like any stationary hazard: a stumble.
+    // Decor props (loungers, bins, ground decals) are pure motion cues and
+    // never collide.
     if (frameNow >= invulnUntil) {
       var items = sceneryItems();
       for (var si = 0; si < items.length; si++) {
         var it = items[si];
+        if (it.cfg.decor) continue;
         var sm = it.worldZ - distance - playerM();
         if (Math.abs(sm) < 0.7 &&
             hitsPlayer(it.u, it.u, it.cfg.width * it.cfg.hit)) {
@@ -3020,17 +3161,15 @@
     var sandDrop = dropHeight();        // sand sits at the base of the drop
     var shoreDrop = dropHeight() + H * 0.075; // constant extra slope to the sea
 
-    // Scroll both ground textures with forward movement, and add a little
-    // life on top: the sea swells/ripples, the sand shimmers faintly. Both
-    // are subtle so the surfaces read as alive, not sliding.
+    // Only the SEA moves: scroll with the player plus gentle wave sway.
+    // The sand base texture is deliberately fully static — movement cues on
+    // the beach come from discrete depth-scaled props (loungers, walkway
+    // boards), not from sliding the ground fill, which read as water.
     var tsec = frameNow / 1000;
     var seaScroll = distance * TEX_SCROLL_PPM;
     shiftPattern(ENV_TEXTURES.sea.pattern,
       Math.sin(tsec * 0.8) * 7 + Math.sin(tsec * 1.7) * 3,          // wave sway
       seaScroll + Math.sin(tsec * 1.1) * 4);                        // swell
-    // Sand only scrolls forward with the player — no horizontal time-based
-    // drift, which read as sea-like left-right wave motion.
-    shiftPattern(ENV_TEXTURES.sand.pattern, 0, distance * TEX_SCROLL_PPM);
 
     // Sea fills everything left of the shoreline
     ctx.fillStyle = ENV_TEXTURES.sea.pattern || ENV_TEXTURES.sea.fallback;
@@ -3144,9 +3283,9 @@
 
     var promTex = ENV_TEXTURES.promenade;
     if (promTex.pattern) {
-      // Real paving texture, tiled across the walkway and scrolled forward
-      // with the player — same flat, screen-space approach as sand and sea.
-      shiftPattern(promTex.pattern, 0, distance * TEX_SCROLL_PPM);
+      // Real paving texture tiled across the walkway. Deliberately static —
+      // no scroll: forward-motion cues come from the discrete depth-scaled
+      // objects (tiles read fixed to the ground, not sliding underfoot).
       fillStrip(left, right, promTex.pattern);
     } else {
       // Fallback until the texture loads: flat surface + tile grid lines.
@@ -3214,7 +3353,7 @@
     // to the screen edge. Because it follows the kerb as a single shape there
     // are no per-block steps, so no seam between the sprites can show the
     // night sky/background through.
-    ctx.fillStyle = '#12233d';
+    ctx.fillStyle = '#0f1c33';
     ctx.beginPath();
     ctx.moveTo(depthToX(right, 0), horizonY());
     ctx.lineTo(W + 12, horizonY());
@@ -3263,16 +3402,31 @@
         continue; // no windows on road blocks
       }
 
+      // A distant-building silhouette for this block: varied height and
+      // width, a slightly lighter shade than the base quad so its outline
+      // reads, with a grid of SMALL dim windows kept inside its bounds.
+      // Far-to-near, so nearer silhouettes overlap into a plausible skyline
+      // rather than floating window slabs on a flat wall.
       var xL = depthToX(right, d);
-      var hgt = (H * 0.34 + rand(b + 57) * H * 0.1) * s;
-      var cols = 3, rows = 4;
-      var winW = (outer - right) * s / (cols * 2 + 1); // window size at this depth
-      var winH = hgt / (rows * 2 + 1);
+      var bw = buildingWidth() * s * (0.85 + rand(b * 1.7) * 0.6);
+      var hgt = (H * 0.14 + rand(b + 57) * H * 0.16) * s;
+      ctx.fillStyle = (b % 2 === 0) ? '#16294a' : '#1a3054';
+      ctx.fillRect(xL, y - hgt, bw, hgt);
+      // flat roof lip
+      ctx.fillStyle = '#0e1c33';
+      ctx.fillRect(xL, y - hgt, bw, Math.max(1, hgt * 0.03));
+
+      var cols = 4, rows = 6;
+      var winW = bw * 0.1;
+      var winH = hgt * 0.045;
+      var gapX = (bw - cols * winW) / (cols + 1);
+      var gapY = (hgt * 0.9 - rows * winH) / (rows + 1);
       for (var r = 0; r < rows; r++) {
         for (var c = 0; c < cols; c++) {
-          if (rand(b * 31 + r * 7 + c * 3) < 0.5) continue; // dark window
-          ctx.fillStyle = 'rgba(255, 209, 102, 0.85)';
-          ctx.fillRect(xL + winW * (c * 2 + 1), y - hgt + winH * (r * 2 + 1), winW, winH);
+          if (rand(b * 31 + r * 7 + c * 3) < 0.42) continue; // dark window
+          ctx.fillStyle = 'rgba(255, 209, 102, 0.5)';
+          ctx.fillRect(xL + gapX + c * (winW + gapX),
+                       y - hgt * 0.95 + gapY + r * (winH + gapY), winW, winH);
         }
       }
     }
@@ -3785,6 +3939,60 @@
     var y = depthToY(d);
     var w = cfg.width * s;
 
+    // Beach props stand on the sunken sand plane, not the promenade deck.
+    if (cfg.beach) y = sunkenY(d, dropHeight() * 1.15);
+
+    if (it.key === 'lounger') {
+      var lg = HAZARD_SPRITES.lounger;
+      if (lg.ready) {
+        var lf = lg.frames[0];
+        var lsc = w / lf.figW; // wide prop: scale by width
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+        ctx.beginPath();
+        ctx.ellipse(x, y, w * 0.5, w * 0.08, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.drawImage(lf.canvas, x - lf.cx * lsc, y - lf.feetY * lsc,
+          lf.w * lsc, lf.h * lsc);
+      }
+      return;
+    }
+
+    if (it.key === 'blueBin') {
+      var bin = HAZARD_SPRITES.blueBin;
+      if (bin.ready) {
+        drawHazardSprite(bin, x, y, w * 2.3, 0, 0);
+      }
+      return;
+    }
+
+    if (it.key === 'walkway') {
+      // Flat boardwalk strip laid on the sand, leading out toward the sea —
+      // ground-decal treatment (like puke): centred on the ground point.
+      var wk = HAZARD_SPRITES.walkway;
+      if (wk.ready) {
+        var wf = wk.frames[0];
+        var wsc = w / wf.figW;
+        ctx.drawImage(wf.canvas, x - wf.cx * wsc,
+          y - (wf.feetY - wf.figH / 2) * wsc * 0.45, // flatten vertically
+          wf.w * wsc, wf.h * wsc * 0.45);
+      }
+      return;
+    }
+
+    if (it.key === 'tilePatch') {
+      // Worn-tile patch decal on the promenade surface — a standalone
+      // irregular overlay, flattened to lie on the ground.
+      var tp = HAZARD_SPRITES.tilePatch;
+      if (tp.ready) {
+        var tf = tp.frames[0];
+        var tsc = w / tf.figW;
+        ctx.drawImage(tf.canvas, x - tf.cx * tsc,
+          y - (tf.feetY - tf.figH / 2) * tsc * 0.5,
+          tf.w * tsc, tf.h * tsc * 0.5);
+      }
+      return;
+    }
+
     if (it.key === 'palm') {
       // Real palm sprite, one of three variants chosen deterministically per
       // placement so the promenade shows variety but every run is identical.
@@ -4251,94 +4459,153 @@
   }
 
   function drawHUD() {
-    var stripH = 44;
-    var rowH = 16;     // second row: score and dodge streak
-    var top = safeTop; // clear of the phone's own status bar / notch
-    var mid = top + stripH / 2;
+    // Redesigned to fill the previously-empty sky zone: big Bebas Neue
+    // display numbers, animated count-ups, and a wide drunk meter. All of
+    // it stays above the gameplay view — the horizon/perspective and the
+    // joystick zone are untouched.
+    var top = safeTop;
+    var bigPx = Math.round(H * 0.036);       // distance / timer numerals
+    var ptsPx = Math.round(H * 0.05);        // PTS / STREAK numerals
+    var labelPx = Math.max(9, Math.round(H * 0.0125));
+    var y1 = top + H * 0.02;                 // row 1 labels baseline
+    var y1v = y1 + labelPx + bigPx * 0.55;   // row 1 values centre
+    var y2 = y1 + H * 0.062;                 // row 2 labels
+    var y2v = y2 + labelPx + ptsPx * 0.55;   // row 2 values centre
+    var meterY = y2v + ptsPx * 0.62 + H * 0.012;
+    var stripBottom = meterY + H * 0.032;
 
-    // Translucent dark strip, extended up behind the status bar area so
-    // the inset doesn't read as a floating gap
+    // Animated counters: the shown numbers ease up to the real values, so
+    // score lands as a tick-up (in step with the "+N" popups) instead of
+    // an instant jump.
+    hudScoreDisp += (score - hudScoreDisp) * 0.1;
+    if (Math.abs(score - hudScoreDisp) < 0.6) hudScoreDisp = score;
+    hudStreakDisp += (streak - hudStreakDisp) * 0.25;
+    if (Math.abs(streak - hudStreakDisp) < 0.4) hudStreakDisp = streak;
+
+    // Translucent dark block over the sky, up behind the notch inset
     ctx.fillStyle = 'rgba(10, 22, 40, 0.72)';
-    ctx.fillRect(0, 0, W, top + stripH + rowH);
+    ctx.fillRect(0, 0, W, stripBottom);
+
+    ctx.textBaseline = 'alphabetic';
+
+    // --- Row 1: distance (left) and timer (right) ---
+    ctx.font = labelPx + 'px "DM Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillText('DISTANCE', 16, y1 + labelPx);
+    ctx.textAlign = 'right';
+    ctx.fillText('TIME', W - 16, y1 + labelPx);
 
     ctx.textBaseline = 'middle';
-    ctx.font = '16px "DM Mono", monospace';
-
-    // Distance top left — Endless has no finish line to count toward
-    ctx.fillStyle = '#ffffff';
+    ctx.font = bigPx + 'px "Bebas Neue", sans-serif';
     ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
     var distText = gameMode === MODE_ENDLESS
-      ? Math.floor(distance) + 'm'
-      : Math.floor(distance) + 'm / ' + RUN_DISTANCE + 'm';
-    ctx.fillText(distText, 14, mid);
-
-    // Timer top right
-    ctx.fillStyle = '#ffd166';
+      ? Math.floor(distance) + 'M'
+      : Math.floor(distance) + 'M / ' + RUN_DISTANCE + 'M';
+    ctx.fillText(distText, 16, y1v);
     ctx.textAlign = 'right';
-    ctx.fillText(elapsed.toFixed(1) + 's', W - 14, mid);
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText(elapsed.toFixed(1) + 'S', W - 16, y1v);
 
-    // Endless lives — beers left, drawn just after the distance readout
+    // Endless lives — beers left, after the distance readout
     if (gameMode === MODE_ENDLESS) {
-      var bx = 14 + ctx.measureText(distText).width + 14;
+      var bx = 16 + ctx.measureText(distText).width + 22;
+      ctx.textAlign = 'left';
       for (var li = 0; li < ENDLESS_LIVES; li++) {
-        drawBeerIcon(bx + li * 15, mid, li < lives);
+        drawBeerIcon(bx + li * 16, y1v, li < lives);
       }
     }
 
-    // Drunk meter, centre of the strip
-    var mw = 80;
-    var mh = 8;
-    var mx = W / 2 - mw / 2;
-    var my = mid + 3;
+    // --- Row 2: PTS (left, animated) and STREAK (right) ---
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = labelPx + 'px "DM Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillText('PTS', 16, y2 + labelPx);
+    ctx.textAlign = 'right';
+    ctx.fillText('STREAK', W - 16, y2 + labelPx);
 
-    ctx.font = '9px "DM Mono", monospace';
+    ctx.textBaseline = 'middle';
+    ctx.font = ptsPx + 'px "Bebas Neue", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    var ptsText = '' + Math.round(hudScoreDisp);
+    ctx.fillText(ptsText, 16, y2v);
+    var ptsW = ctx.measureText(ptsText).width;
+    if (scoreMult() > 1) {
+      ctx.font = Math.round(ptsPx * 0.5) + 'px "Bebas Neue", sans-serif';
+      ctx.fillStyle = '#ffd166';
+      ctx.fillText('X' + CHAT_MULT, 16 + ptsW + 8, y2v - ptsPx * 0.2);
+    }
+    ctx.font = ptsPx + 'px "Bebas Neue", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = streak > 0 ? '#7fd069' : 'rgba(255, 255, 255, 0.4)';
+    ctx.fillText('' + Math.round(hudStreakDisp), W - 16, y2v);
+
+    // Floating "+N" score popups — anchored beside the PTS counter, rising
+    // and fading entirely within the HUD block (never over gameplay).
+    for (var pi = scorePops.length - 1; pi >= 0; pi--) {
+      var pop = scorePops[pi];
+      var pt = (frameNow - pop.born) / SCORE_POP_MS;
+      if (pt >= 1) { scorePops.splice(pi, 1); continue; }
+      var easeUp = 1 - Math.pow(1 - pt, 2);            // decelerating rise
+      var py = y2v + H * 0.022 - easeUp * H * 0.034;   // rises into the number
+      var alpha = pt < 0.65 ? 1 : 1 - (pt - 0.65) / 0.35;
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.font = Math.round(ptsPx * 0.55) + 'px "Bebas Neue", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = pop.amt > 0 ? '#ffd166' : '#ff4d6d';
+      ctx.fillText((pop.amt > 0 ? '+' : '') + pop.amt,
+        16 + ptsW + 10 + pi * 4, py);
+      ctx.globalAlpha = 1;
+    }
+
+    // --- Row 3: the drunk meter, wide across the block ---
+    var mw = W * 0.7;
+    var mh = Math.max(8, H * 0.013);
+    var mx = W / 2 - mw / 2;
+    var my = meterY;
+
+    ctx.font = labelPx + 'px "DM Mono", monospace';
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.fillText('DRUNK', W / 2, mid - 8);
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillText('DRUNK', W / 2, my - 5);
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(mx, my, mw, mh);
+    roundRect(mx, my, mw, mh, mh / 2);
+    ctx.stroke();
     if (drunk > 0) {
       ctx.fillStyle = '#ffc233';
-      ctx.fillRect(mx + 1, my + 1,
-        (mw - 2) * Math.min(drunk / DRUNK_METER_MAX, 1), mh - 2);
+      var fw = (mw - 4) * Math.min(drunk / DRUNK_METER_MAX, 1);
+      if (fw > 2) {
+        roundRect(mx + 2, my + 2, fw, mh - 4, (mh - 4) / 2);
+        ctx.fill();
+      }
     }
 
-    // (The carried rose now has its own illustrated icon + pill in the
-    // second row — no separate glyph beside the meter.)
+    ctx.textBaseline = 'middle';
 
-    // Second row: points (with the hen bonus multiplier) and dodge streak
-    var rowMid = top + stripH + rowH / 2 - 2;
-    ctx.font = '11px "DM Mono", monospace';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-    ctx.fillText('PTS ' + score + (scoreMult() > 1 ? '  x' + CHAT_MULT : ''),
-      14, rowMid);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = streak > 0 ? '#7fd069' : 'rgba(255, 255, 255, 0.45)';
-    ctx.fillText('STREAK ' + streak, W - 14, rowMid);
-
-    // Carrying a rose: the rose icon in the middle of the row, on a small
-    // dark pill so it stays legible over any background. Falls back to the
-    // old text chip until the image has loaded.
+    // Carrying a rose: icon pill centred between PTS and STREAK
     if (roses > 0) {
+      var rowMid = y2v;
       var haveIcon = roseIcon.complete && roseIcon.naturalWidth > 0;
       if (haveIcon) {
-        var riN = 20;                              // icon box, px
+        var riN = 22;
         var countTxt = roses > 1 ? 'x' + roses : '';
-        ctx.font = 'bold 11px "DM Mono", monospace';
+        ctx.font = 'bold 12px "DM Mono", monospace';
         var cw = countTxt ? ctx.measureText(countTxt).width + 4 : 0;
         var padX = 7;
         var pillW = riN + cw + padX * 2;
         var pillX = W / 2 - pillW / 2;
-        ctx.fillStyle = 'rgba(10, 22, 40, 0.85)';  // dark backing for contrast
+        ctx.fillStyle = 'rgba(10, 22, 40, 0.85)';
         roundRect(pillX, rowMid - riN / 2 - 1, pillW, riN + 2, (riN + 2) / 2);
         ctx.fill();
         ctx.drawImage(roseIcon, pillX + padX, rowMid - riN / 2, riN, riN);
         if (countTxt) {
           ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
           ctx.fillStyle = '#ff4d6d';
           ctx.fillText(countTxt, pillX + padX + riN + 4, rowMid);
         }
@@ -4353,14 +4620,13 @@
       }
     }
 
-    // Transient notice line under the HUD
+    // Transient notice line under the HUD block
     if (frameNow < noticeUntil) {
-      ctx.font = '13px "DM Sans", sans-serif';
+      ctx.font = Math.round(H * 0.015) + 'px "DM Sans", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillStyle = '#ffd166';
-      ctx.fillText(noticeText, W / 2, top + stripH + rowH + 14);
+      ctx.fillText(noticeText, W / 2, stripBottom + H * 0.016);
     }
-
   }
 
   // The joystick: translucent base ring plus a nub that tracks the thumb
