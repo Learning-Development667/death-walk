@@ -344,6 +344,32 @@
       -webkit-tap-highlight-color: transparent;
     }
     #mute-btn:active { background: rgba(255, 255, 255, 0.2); }
+
+    /* Quit-to-home button — small, unobtrusive, top-left over the sky just
+       below the HUD strip. Only shown while a run is in progress (toggled in
+       JS). Clear of the HUD text, the centred mute button and the joystick. */
+    #home-btn {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 19.5%);
+      left: 10px;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      background: rgba(10, 22, 40, 0.55);
+      color: #fff;
+      font-size: 20px;
+      line-height: 1;
+      z-index: 22;
+      cursor: pointer;
+      display: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #home-btn:active { background: rgba(255, 255, 255, 0.2); }
+
+    /* Quit confirm sits above the HUD, home and mute buttons. */
+    #quit-overlay { z-index: 30; }
+    #quit-overlay .subtitle { margin-top: 14px; }
   </style>
 
   <!-- Coverflow avatar picker component -->
@@ -745,6 +771,21 @@
   <!-- Sound mute toggle — sits in the footer control zone, between the
        squad chip and the joystick, clear of gameplay and the HUD -->
   <button id="mute-btn" aria-label="Toggle sound">🔊</button>
+
+  <!-- Quit-to-home button — only visible while a run is in progress -->
+  <button id="home-btn" aria-label="Quit to home screen">⌂</button>
+
+  <!-- Quit confirmation — pauses the run; RESUME cancels, QUIT goes home -->
+  <div id="quit-overlay" class="overlay hidden">
+    <div class="confirm-card">
+      <div class="confirm-text">QUIT TO HOME?</div>
+      <div class="subtitle">You'll lose this run — no do-overs, soldier.</div>
+      <div class="hand-row">
+        <button class="btn" id="quit-resume">RESUME</button>
+        <button class="btn" id="quit-confirm">QUIT</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Invisible probe: exposes env(safe-area-inset-top) to canvas code -->
   <div id="safe-probe"

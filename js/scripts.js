@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.55.0';
+  var VERSION = '0.56.0';
 
   // ---------------------------------------------------------------------
   // Tuning
@@ -899,6 +899,7 @@
     skidUntil = 0;
     skidVel = 0;
     state = STATE_READY;
+    showHomeBtn(); // quit-to-home available for the duration of the run
   }
 
   function startWalking() {
@@ -1065,6 +1066,7 @@
     // both modes, only overwriting a record that was actually beaten.
     recordRunStats(gameMode);
 
+    hideHomeBtn(); // the end screen owns the navigation from here
     endScreen.classList.remove('hidden');
   }
 
@@ -1674,6 +1676,68 @@
     endScreen.classList.add('hidden');
     resetRun();
   });
+
+  // ---------------------------------------------------------------------
+  // Quit to home — a way back to the start screen (character select /
+  // achievements / stats) mid-run. The home button only shows while a run
+  // is live; tapping it pauses and asks to confirm, so an in-progress run is
+  // never yanked away without warning.
+  // ---------------------------------------------------------------------
+  var homeBtn = document.getElementById('home-btn');
+  var quitOverlay = document.getElementById('quit-overlay');
+  var quitResumeBtn = document.getElementById('quit-resume');
+  var quitConfirmBtn = document.getElementById('quit-confirm');
+  var quitPrevPaused = false; // pause state to restore if they cancel
+
+  function showHomeBtn() { if (homeBtn) homeBtn.style.display = 'block'; }
+  function hideHomeBtn() { if (homeBtn) homeBtn.style.display = 'none'; }
+
+  function openQuitConfirm() {
+    // Only meaningful during a live run (world visible, not already ended).
+    if (state !== STATE_READY && state !== STATE_WALKING) return;
+    if (!quitOverlay) return;
+    quitPrevPaused = paused;   // remember, so RESUME restores it exactly
+    paused = true;             // freeze the world behind the dialog
+    quitOverlay.classList.remove('hidden');
+  }
+  function cancelQuit() {
+    if (quitOverlay) quitOverlay.classList.add('hidden');
+    paused = quitPrevPaused;   // resume exactly as it was
+  }
+  // Clean return to the start screen — the same tidy state a normal finish
+  // leaves behind: no lingering pause, no orphaned overlays or run objects.
+  function quitToHome() {
+    if (quitOverlay) quitOverlay.classList.add('hidden');
+    closeAllOverlays();        // clears any msg/photo overlay and unpauses
+    endScreen.classList.add('hidden');
+    hazards.length = 0;
+    pickups.length = 0;
+    noticeUntil = 0;
+    joyId = null; joyDX = 0; joyDY = 0;
+    hideHomeBtn();
+    state = STATE_TITLE;
+    refreshBestOnTitle();
+    startScreen.classList.remove('hidden');
+  }
+
+  if (homeBtn) {
+    homeBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openQuitConfirm();
+    });
+  }
+  if (quitResumeBtn) {
+    quitResumeBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      cancelQuit();
+    });
+  }
+  if (quitConfirmBtn) {
+    quitConfirmBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      quitToHome();
+    });
+  }
 
   // ---------------------------------------------------------------------
   // Device owner — a persistent "whose phone is this" identity, distinct
